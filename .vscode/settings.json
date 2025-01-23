@@ -9,6 +9,8 @@
 		"locale": "cpp",
 		"thread": "cpp",
 		"new": "cpp",
-		"random": "cpp"
+		"random": "cpp",
+		"chrono": "cpp",
+		"xlocale": "cpp"
 	}
 }

@@ -165,34 +165,6 @@ public:
 	}
 };
 
-void PrintTree(IO::Console & cns, const Volumes::BinaryTree<int>::Element * element, int y, int x, int width)
-{
-	if (element) {
-		auto repr = string(element->GetValue());
-		auto l = repr.Length();
-		cns.SetTextColor(element->IsBlack() ? 15 : 12);
-		cns.MoveCaret(x + (width - l) / 2, y);
-		cns.Write(repr);
-		auto hw = width / 2;
-		PrintTree(cns, element->GetLeft(), y + 1, x, hw);
-		PrintTree(cns, element->GetRight(), y + 1, x + hw, width - hw);
-	}
-}
-int CheckConsistency(IO::Console & cns, const Volumes::BinaryTree<int>::Element * element, const Volumes::BinaryTree<int>::Element * parent)
-{
-	auto value = element->GetValue();
-	if (element->GetParent() != parent) { cns.WriteLine(FormatString(L"Check failed: wrong parent at %0", value)); throw Exception(); }
-	int lh = 1;
-	int rh = 1;
-	if (element->GetLeft()) lh = CheckConsistency(cns, element->GetLeft(), element);
-	if (element->GetRight()) rh = CheckConsistency(cns, element->GetRight(), element);
-	if (parent) {
-		if (!parent->IsBlack() && !element->IsBlack()) { cns.WriteLine(FormatString(L"Check failed: sequential red nodes at %0", value)); throw Exception(); }
-	}
-	if (lh != rh) { cns.WriteLine(FormatString(L"Check failed: wrong left and right black heights at %0", value)); throw Exception(); }
-	if (element->IsBlack()) return lh + 1; else return lh;
-}
-
 int Main(void)
 {
 	IO::Console cns;
@@ -200,7 +172,7 @@ int Main(void)
 	SafePointer<Windows::IScreen> screen = Windows::GetDefaultScreen();
 	UI::CurrentScaleFactor = screen->GetDpiScale();
 	UI::InterfaceTemplate ui;
-	SafePointer<Streaming::Stream> uis = new Streaming::FileStream(L"/Users/manwe/Documents/GitHub/VirtualUI/Tests/test.eui", Streaming::AccessRead, Streaming::OpenExisting);
+	SafePointer<Streaming::Stream> uis = new Streaming::FileStream(L"/Users/manwe/Documents/GitHub/EngineRuntime/Tests/test.eui", Streaming::AccessRead, Streaming::OpenExisting);
 	UI::Loader::LoadUserInterfaceFromBinary(ui, uis);
 	uis.SetReference(0);
 
@@ -254,24 +226,6 @@ int Main(void)
 	Volumes::BinaryTree<string> tree_s;
 	Volumes::Dictionary<string, int> dict;
 	stack << L"A" << L"B"<< L"C";
-	/*cns.AlternateScreenBuffer(true);
-	for (int i = 1; i < 20; i++) tree_i.FindElement(i, true);
-	while (true) {
-		int w, h;
-		cns.ClearScreen();
-		cns.GetScreenBufferDimensions(w, h);
-		PrintTree(cns, tree_i.GetRoot(), 0, 0, w);
-		cns.LineFeed();
-		cns.SetTextColor(10);
-		auto line = cns.ReadLine();
-		if (!line.Length()) break;
-		try {
-			int i = line.ToInt32();
-			if (i >= 0) tree_i.FindElement(i, true);
-			else tree_i.Remove(tree_i.FindElement(-i));
-		} catch (...) { break; }
-	}
-	cns.AlternateScreenBuffer(false);*/
 	cns.WriteLine(stack.ToString());
 	for (auto & e : stack) cns.WriteLine(e);
 	cns.WriteLine(tree_i.ToString());

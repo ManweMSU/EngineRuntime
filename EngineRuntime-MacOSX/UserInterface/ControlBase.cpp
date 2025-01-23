@@ -657,6 +657,12 @@ namespace Engine
 						WindowDesc.Flags |= Windows::WindowFlagWindowsExtendedFrame;
 						WindowDesc.FrameMargins = Box(ex_data->WindowsLeftMargin, ex_data->WindowsTopMargin, ex_data->WindowsRightMargin, ex_data->WindowsBottomMargin);
 					}
+					if (ex_data->WindowsTabbedTitle) WindowDesc.Flags |= Windows::WindowFlagWindowsTabbedTitle;
+					else if (ex_data->WindowsTransientTitle) WindowDesc.Flags |= Windows::WindowFlagWindowsTransientTitle;
+					else if (ex_data->WindowsColoredTitle) {
+						WindowDesc.Flags |= Windows::WindowFlagWindowsColoredTitle;
+						WindowDesc.BackgroundColor = ex_data->WindowsTitleColor;
+					}
 					if (ex_data->MacTransparentTitle) WindowDesc.Flags |= Windows::WindowFlagCocoaTransparentTitle;
 					if (ex_data->MacEffectBackground || ex_data->MacEffectBackgroundMaterial.Length()) WindowDesc.Flags |= Windows::WindowFlagCocoaEffectBackground;
 					if (ex_data->MacUseLightTheme) {

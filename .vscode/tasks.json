@@ -81,6 +81,24 @@
             }
         },
         {
+            "label": "build runtime (debug mode, arm)",
+            "type": "shell",
+            "command": "\"${workspaceRoot}/bin/macosx/ertbuild\"",
+            "args": [
+                "-bda", "arm64"
+            ],
+            "group": "build",
+            "presentation": {
+            },
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": [ "relative", "${workspaceRoot}" ],
+                "pattern": { "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            }
+        },
+        {
             "label": "build runtime (linux)",
             "type": "shell",
             "command": "\"${workspaceRoot}/bin/linux/ertbuild\"",
@@ -140,6 +158,24 @@
             "command": "\"${workspaceRoot}/bin/macosx/ertbuild\"",
             "args": [
                 "\"${workspaceRoot}/Unix Tests/test.project.ini\"", "-d"
+            ],
+            "group": "build",
+            "presentation": {
+            },
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": [ "relative", "${workspaceRoot}" ],
+                "pattern": { "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            }
+        },
+        {
+            "label": "build test (arm)",
+            "type": "shell",
+            "command": "\"${workspaceRoot}/bin/macosx/ertbuild\"",
+            "args": [
+                "\"${workspaceRoot}/Unix Tests/test.project.ini\"", "-da", "arm64"
             ],
             "group": "build",
             "presentation": {
