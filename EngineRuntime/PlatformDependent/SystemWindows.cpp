@@ -613,9 +613,9 @@ namespace Engine
 					Effect::EndDraw(_layers);
 				} else {
 					if (_render_target_ex) {
-						if (_render_target_ex->EndDraw() != S_OK) { _crashed = true; return false; } else _swap_chain_ex->Present(1, 0);
+						if (_render_target_ex->EndDraw() != S_OK) { _crashed = true; return false; } else if (_swap_chain_ex->Present(1, 0) != S_OK) { _crashed = true; return false; }
 					} else if (_render_target_d3d) {
-						if (_render_target_d3d->EndDraw() != S_OK) { _crashed = true; return false; } else _swap_chain->Present(1, 0);
+						if (_render_target_d3d->EndDraw() != S_OK) { _crashed = true; return false; } else if (_swap_chain->Present(1, 0) != S_OK) { _crashed = true; return false; }
 					} else if (_render_target) {
 						if (_render_target->EndDraw() != S_OK) { _crashed = true; return false; }
 					}
@@ -938,6 +938,7 @@ namespace Engine
 			double _blur_factor;
 			Color _clear_color;
 			int _layer_flags; // 1 - draw using user's callback, 2 - draw using layer's service
+			bool _first_time_render;
 			func_RenderLayerCallback _render_callback;
 
 			void _dwm_reset(void)
@@ -981,6 +982,10 @@ namespace Engine
 						ValidateRect(wnd, 0);
 						if (self->_layer_flags & 1) if (self->_callback) self->_callback->RenderWindow(self);
 						if (self->_layer_flags & 2) self->_render_callback(self->_layer, self);
+						if (self->_first_time_render) {
+							self->_first_time_render = true;
+							GetWindowSystem()->SubmitTask(CreateFunctionalTask([w = wnd]() { InvalidateRect(w, 0, FALSE); }));
+						}
 						return 0;
 					} else if (msg == WM_SIZE) {
 						auto size = self->GetClientSize();
@@ -1155,10 +1160,13 @@ namespace Engine
 						SetWindowLongPtrW(wnd, 0, 0);
 						return 0;
 					} else return DefWindowProcW(wnd, msg, wparam, lparam);
-				} else return DefWindowProcW(wnd, msg, wparam, lparam);
+				} else {
+					if (msg == WM_PAINT) InvalidateRect(wnd, 0, FALSE);
+					else return DefWindowProcW(wnd, msg, wparam, lparam);
+				}
 			}
 			SystemWindow(const CreateWindowDesc & desc, HINSTANCE instance, bool modal = false) : _children(0x20), _taskbar(0), _effect_flags(0), _effective_flags(0),
-				_last_x(0x80000000), _last_y(0x80000000), _surrogate(0), _layer_flags(0), _render_callback(0), _clear_color(0), _is_modal(modal), _layered(0)
+				_last_x(0x80000000), _last_y(0x80000000), _surrogate(0), _layer_flags(0), _first_time_render(true), _render_callback(0), _clear_color(0), _is_modal(modal), _layered(0)
 			{
 				_callback = desc.Callback;
 				_parent = desc.ParentWindow ? static_cast<SystemWindow *>(desc.ParentWindow) : 0;
@@ -1338,6 +1346,7 @@ namespace Engine
 					_layer->Attach(this);
 					_layer->Invalidate();
 				}
+				_first_time_render = true;
 			}
 			virtual IPresentationEngine * GetPresentationEngine(void) override { return _layer; }
 			virtual void InvalidateContents(void) override { if (_layer) _layer->Invalidate(); }
@@ -2280,7 +2289,9 @@ namespace Engine
 			{
 				if (!window || !static_cast<SystemWindow *>(window)->_is_modal) return;
 				if (window->GetParentWindow()) {
-					EnableWindow(reinterpret_cast<HWND>(window->GetParentWindow()->GetOSHandle()), TRUE);
+					auto parent = reinterpret_cast<HWND>(window->GetParentWindow()->GetOSHandle());
+					EnableWindow(parent, TRUE);
+					SetForegroundWindow(parent);
 					window->Destroy();
 				} else ExitMainLoop();
 			}

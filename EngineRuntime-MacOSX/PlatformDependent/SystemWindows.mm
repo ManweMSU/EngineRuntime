@@ -11,7 +11,7 @@
 #include "MetalDevice.h"
 #include "SystemWindowsAPI.h"
 
-typedef void *CGSConnection;
+typedef void * CGSConnection;
 extern "C" OSStatus CGSSetWindowBackgroundBlurRadius(CGSConnection connection, NSInteger windowNumber, int radius);
 extern "C" CGSConnection CGSDefaultConnectionForThread();
 
@@ -179,10 +179,12 @@ extern "C" CGSConnection CGSDefaultConnectionForThread();
 
 namespace Engine
 {
-	namespace Windows
+	namespace Cocoa
 	{
 		Volumes::Dictionary<KeyCodes::Key, bool> KeyboardStatus;
-
+	}
+	namespace Windows
+	{
 		// Screens and Themes
 		class SystemScreen : public IScreen
 		{
@@ -624,7 +626,7 @@ namespace Engine
 					throw;
 				}
 			}
-			virtual ~SystemWindow(void) override { if (_window) throw Exception(); }
+			virtual ~SystemWindow(void) override { if (_window) abort(); }
 			virtual void Show(bool show) override { if (!_parent || _parent->_on_screen) _present(show, true); _visible = show; }
 			virtual bool IsVisible(void) override { return _on_screen; }
 			virtual void SetText(const string & text) override { auto title = Cocoa::CocoaString(text); [_window setTitle: title]; [title release]; }
@@ -786,6 +788,7 @@ namespace Engine
 				_view->owner = 0;
 				[_window setDelegate: 0];
 				[_delegate release];
+				[_window close];
 				[_window release];
 				_window = 0;
 				Release();
@@ -2480,7 +2483,7 @@ namespace Engine
 	}
 	- (void) windowDidResignKey: (NSNotification *) notification
 	{
-		Engine::Windows::KeyboardStatus.Clear();
+		Engine::Cocoa::KeyboardStatus.Clear();
 		auto window = static_cast<Engine::Windows::SystemWindow *>(owner);
 		if (window) {
 			window->_view->flag_states = 0;
@@ -2807,7 +2810,7 @@ namespace Engine
 		bool dead;
 		auto key = static_cast<Engine::KeyCodes::Key>(Engine::Cocoa::EngineKeyCode([event keyCode], dead));
 		if (Engine::Keyboard::IsKeyPressed(Engine::KeyCodes::Control) || Engine::Keyboard::IsKeyPressed(Engine::KeyCodes::Alternative) || Engine::Keyboard::IsKeyPressed(Engine::KeyCodes::System)) dead = true;
-		if (!Engine::Windows::KeyboardStatus.GetElementByKey(key)) Engine::Windows::KeyboardStatus.Append(key, true);
+		if (!Engine::Cocoa::KeyboardStatus.GetElementByKey(key)) Engine::Cocoa::KeyboardStatus.Append(key, true);
 		Engine::Windows::IWindowCallback * callback;
 		if (key && owner && (callback = owner->GetCallback())) {
 			if (!callback->KeyDown(owner, key) && !dead) {
@@ -2823,7 +2826,7 @@ namespace Engine
 	{
 		bool dead;
 		auto key = static_cast<Engine::KeyCodes::Key>(Engine::Cocoa::EngineKeyCode([event keyCode], dead));
-		Engine::Windows::KeyboardStatus.Remove(key);
+		Engine::Cocoa::KeyboardStatus.Remove(key);
 		Engine::Windows::IWindowCallback * callback;
 		if (key && owner && (callback = owner->GetCallback())) callback->KeyUp(owner, key);
 	}

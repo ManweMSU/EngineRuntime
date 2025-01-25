@@ -3,6 +3,7 @@
 using namespace Engine;
 
 SafePointer<Graphics::IBitmap> synth;
+uint wcnt = 0;
 
 class WindowCallback : public Windows::IWindowCallback
 {
@@ -15,9 +16,32 @@ class WindowCallback : public Windows::IWindowCallback
 	SafePointer<Graphics::ITexture> texture;
 	SafePointer<Graphics::IBitmapBrush> texture_brush;
 	SafePointer<UI::FrameShape> shape;
+	UI::InterfaceTemplate * _ui;
+	double value;
 public:
+	static void Create(UI::InterfaceTemplate & ui)
+	{
+		auto callback = new WindowCallback;
+		callback->_ui = &ui;
+		Windows::CreateWindowDesc desc;
+		ZeroMemory(&desc, sizeof(desc));
+		desc.Callback = callback;
+		desc.Flags = Windows::WindowFlagCloseButton | Windows::WindowFlagHasTitle |
+			Windows::WindowFlagBlurBehind |
+			Windows::WindowFlagTransparent |
+			Windows::WindowFlagBlurFactor |
+			Windows::WindowFlagMinimizeButton | Windows::WindowFlagMaximizeButton | Windows::WindowFlagSizeble;
+		desc.MinimalConstraints = Point(300, 200);
+		desc.Position = Box(100, 100, 800, 600);
+		desc.Title = L"New Blur Behind Test";
+		desc.BlurFactor = 150.0;
+		auto window = Windows::GetWindowSystem()->CreateWindow(desc);
+		window->Show(true);
+	}
 	virtual void Created(Windows::IWindow * window) override
 	{
+		wcnt++;
+		value = 0.0;
 		SafePointer<Graphics::I2DDeviceContextFactory> factory = Graphics::CreateDeviceContextFactory();
 		font = factory->LoadFont(Graphics::SystemMonoSerifFont, 100, 700, false, false, false);
 		engine = window->Set2DRenderingDevice();
@@ -33,7 +57,7 @@ public:
 		shape->Children.Append(bm);
 		shape->Children.Append(fx);
 	}
-	virtual void Destroyed(Windows::IWindow * window) override { Windows::GetWindowSystem()->ExitMainLoop(); }
+	virtual void Destroyed(Windows::IWindow * window) override { wcnt--; if (!wcnt) Windows::GetWindowSystem()->ExitMainLoop(); delete this; }
 	virtual void RenderWindow(Windows::IWindow * window) override
 	{
 		auto size = window->GetClientSize();
@@ -148,6 +172,8 @@ public:
 			grad_box.Left = grad_box.Top = (grad_box.Left + 40) % 200;
 			grad_box.Right = grad_box.Bottom = grad_box.Left + 50;
 			window->InvalidateContents();
+		} else if (key_code == KeyCodes::C) {
+			Create(*_ui);
 		}
 		return true;
 	}
@@ -253,25 +279,10 @@ int Main(void)
 
 	Codec::InitializeDefaultCodecs();
 	
-	WindowCallback callback;
 	WindowCallback2 callback2;
-	Windows::CreateWindowDesc desc;
-	ZeroMemory(&desc, sizeof(desc));
-	desc.Callback = &callback;
-	desc.Flags = Windows::WindowFlagCloseButton | Windows::WindowFlagHasTitle |
-		Windows::WindowFlagBlurBehind |
-		Windows::WindowFlagTransparent |
-		Windows::WindowFlagBlurFactor |
-		Windows::WindowFlagMinimizeButton | Windows::WindowFlagMaximizeButton | Windows::WindowFlagSizeble;
-	desc.MinimalConstraints = Point(300, 200);
-	desc.Position = Box(100, 100, 800, 600);
-	desc.Title = L"New Blur Behind Test";
-	desc.BlurFactor = 150.0;
-	auto window = Windows::GetWindowSystem()->CreateWindow(desc);
 	auto window2 = UI::CreateWindow(ui.Dialog[L"Test2"], &callback2, UI::Rectangle::Entire());
-	window->Show(true);
 	window2->Show(true);
-	cns.WriteLine(window->GetBackgroundFlags());
+	WindowCallback::Create(ui);
 	Windows::GetWindowSystem()->RunMainLoop();
 	return 0;
 }
