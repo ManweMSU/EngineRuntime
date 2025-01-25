@@ -6,7 +6,7 @@ namespace Engine
 {
 	namespace Streaming
 	{
-		enum FileAccess { AccessRead, AccessWrite, AccessReadWrite };
+		enum FileAccess { AccessNo, AccessRead, AccessWrite, AccessReadWrite };
 		enum FileCreationMode { CreateAlways, CreateNew, OpenAlways, OpenExisting, TruncateExisting };
 		enum SeekOrigin { Begin, Current, End };
 	}

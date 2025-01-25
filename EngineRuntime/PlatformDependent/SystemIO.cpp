@@ -77,6 +77,8 @@ namespace Engine
 				Access = GENERIC_WRITE;
 			} else if (access == Streaming::FileAccess::AccessReadWrite) {
 				Access = GENERIC_READ | GENERIC_WRITE;
+			} else if (access == Streaming::FileAccess::AccessNo) {
+				Share = FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE;
 			} else throw InvalidArgumentException();
 			DWORD Creation = 0;
 			if (mode == Streaming::FileCreationMode::CreateAlways) Creation = CREATE_ALWAYS;

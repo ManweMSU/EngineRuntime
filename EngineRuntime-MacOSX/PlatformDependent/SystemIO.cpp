@@ -20,7 +20,7 @@ namespace Engine
 {
 	namespace IO
 	{
-        uint PosixErrorToEngineError(int code)
+		uint PosixErrorToEngineError(int code)
 		{
 			if (code == 0) return Error::Success;
 			else if (code == EACCES) return Error::AccessDenied;
@@ -51,19 +51,20 @@ namespace Engine
 			else if (code == EBUSY) return Error::AccessDenied;
 			return Error::Unknown;
 		}
-        handle CreateFile(const string & path, Streaming::FileAccess access, Streaming::FileCreationMode mode)
+		handle CreateFile(const string & path, Streaming::FileAccess access, Streaming::FileCreationMode mode)
 		{
-            SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
-            int flags = 0;
-            if (access == Streaming::AccessRead) flags = O_RDONLY;
-            else if (access == Streaming::AccessWrite) flags = O_WRONLY;
-            else if (access == Streaming::AccessReadWrite) flags = O_RDWR;
+			SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			int flags = 0;
+			if (access == Streaming::AccessRead) flags = O_RDONLY;
+			else if (access == Streaming::AccessWrite) flags = O_WRONLY;
+			else if (access == Streaming::AccessReadWrite) flags = O_RDWR;
+			else if (access == Streaming::AccessNo) flags = O_RDONLY;
 			else throw InvalidArgumentException();
-            int result = -1;
-            if (mode == Streaming::CreateNew) flags |= O_CREAT | O_EXCL;
-            else if (mode == Streaming::CreateAlways) flags |= O_CREAT | O_TRUNC;
-            else if (mode == Streaming::OpenAlways) flags |= O_CREAT;
-            else if (mode == Streaming::TruncateExisting) flags |= O_TRUNC;
+			int result = -1;
+			if (mode == Streaming::CreateNew) flags |= O_CREAT | O_EXCL;
+			else if (mode == Streaming::CreateAlways) flags |= O_CREAT | O_TRUNC;
+			else if (mode == Streaming::OpenAlways) flags |= O_CREAT;
+			else if (mode == Streaming::TruncateExisting) flags |= O_TRUNC;
 			else if (mode == Streaming::OpenExisting);
 			else throw InvalidArgumentException();
 			do {
@@ -87,16 +88,16 @@ namespace Engine
 				close(result);
 				throw FileAccessException(Error::AccessDenied);
 			}
-            return handle(result);
+			return handle(result);
 		}
-        void CreatePipe(handle * pipe_in, handle * pipe_out)
-        {
-            int result[2];
-            if (pipe(result) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-            *pipe_in = reinterpret_cast<handle>(result[1]);
-            *pipe_out = reinterpret_cast<handle>(result[0]);
-        }
-        handle CloneHandle(handle file)
+		void CreatePipe(handle * pipe_in, handle * pipe_out)
+		{
+			int result[2];
+			if (pipe(result) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+			*pipe_in = reinterpret_cast<handle>(result[1]);
+			*pipe_out = reinterpret_cast<handle>(result[0]);
+		}
+		handle CloneHandle(handle file)
 		{
 			if (file == InvalidHandle) return InvalidHandle;
 			int new_file = dup(reinterpret_cast<intptr>(file));
@@ -108,7 +109,7 @@ namespace Engine
 			if (file == InvalidHandle) return;
 			close(reinterpret_cast<intptr>(file));
 		}
-        void ReadFile(handle file, void * to, uint32 amount)
+		void ReadFile(handle file, void * to, uint32 amount)
 		{
 			do {
 				auto Read = read(reinterpret_cast<intptr>(file), to, amount);
@@ -127,20 +128,20 @@ namespace Engine
 		}
 		int64 Seek(handle file, int64 position, Streaming::SeekOrigin origin)
 		{
-            int org = SEEK_SET;
-            if (origin == Streaming::Current) org = SEEK_CUR;
-            else if (origin == Streaming::End) org = SEEK_END;
-            auto result = lseek(reinterpret_cast<intptr>(file), position, org);
-            if (result == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+			int org = SEEK_SET;
+			if (origin == Streaming::Current) org = SEEK_CUR;
+			else if (origin == Streaming::End) org = SEEK_END;
+			auto result = lseek(reinterpret_cast<intptr>(file), position, org);
+			if (result == -1) throw FileAccessException(PosixErrorToEngineError(errno));
 			return result;
 		}
-        uint64 GetFileSize(handle file)
+		uint64 GetFileSize(handle file)
 		{
-            struct stat info;
-            if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-            return info.st_size;
+			struct stat info;
+			if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+			return info.st_size;
 		}
-        void SetFileSize(handle file, uint64 size)
+		void SetFileSize(handle file, uint64 size)
 		{
 			do {
 				int io = ftruncate(reinterpret_cast<intptr>(file), size);
@@ -148,7 +149,7 @@ namespace Engine
 				else if (io != -1) return;
 			} while (true);
 		}
-        void Flush(handle file)
+		void Flush(handle file)
 		{
 			int io;
 			do {
@@ -156,11 +157,11 @@ namespace Engine
 				if (io == -1 && errno != EINTR) throw FileAccessException(PosixErrorToEngineError(errno));
 			} while (io == -1);
 		}
-        bool FileExists(const string & path)
+		bool FileExists(const string & path)
 		{
-            SafePointer<Array<uint8>> Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
-            int file = open(reinterpret_cast<char *>(Path->GetBuffer()), O_RDONLY);
-            if (file >= 0) {
+			SafePointer<Array<uint8>> Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			int file = open(reinterpret_cast<char *>(Path->GetBuffer()), O_RDONLY);
+			if (file >= 0) {
 				struct stat file_stat;
 				if (fstat(file, &file_stat) == -1) {
 					close(file);
@@ -170,35 +171,35 @@ namespace Engine
 					close(file);
 					return false;
 				}
-                close(file);
-                return true;
-            } else return false;
+				close(file);
+				return true;
+			} else return false;
 		}
 		void MoveFile(const string & from, const string & to)
-        {
-            SafePointer<Array<uint8>> From = Path::NormalizePath(from).EncodeSequence(Encoding::UTF8, true);
-            SafePointer<Array<uint8>> To = Path::NormalizePath(to).EncodeSequence(Encoding::UTF8, true);
-            if (rename(reinterpret_cast<char *>(From->GetBuffer()), reinterpret_cast<char *>(To->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-        }
-        void RemoveFile(const string & path)
-        {
-            SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
-            if (unlink(reinterpret_cast<char *>(Path->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-        }
-        void CreateDirectory(const string & path)
 		{
-            SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
-            if (mkdir(reinterpret_cast<char *>(Path->GetBuffer()), 0777) == -1) {
-                if (errno == EEXIST) {
-                    throw DirectoryAlreadyExistsException();
-                }
-                throw FileAccessException(PosixErrorToEngineError(errno));
-            }
+			SafePointer<Array<uint8>> From = Path::NormalizePath(from).EncodeSequence(Encoding::UTF8, true);
+			SafePointer<Array<uint8>> To = Path::NormalizePath(to).EncodeSequence(Encoding::UTF8, true);
+			if (rename(reinterpret_cast<char *>(From->GetBuffer()), reinterpret_cast<char *>(To->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+		}
+		void RemoveFile(const string & path)
+		{
+			SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			if (unlink(reinterpret_cast<char *>(Path->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+		}
+		void CreateDirectory(const string & path)
+		{
+			SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			if (mkdir(reinterpret_cast<char *>(Path->GetBuffer()), 0777) == -1) {
+				if (errno == EEXIST) {
+					throw DirectoryAlreadyExistsException();
+				}
+				throw FileAccessException(PosixErrorToEngineError(errno));
+			}
 		}
 		void RemoveDirectory(const string & path)
 		{
-            SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
-            if (rmdir(reinterpret_cast<char *>(Path->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+			SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			if (rmdir(reinterpret_cast<char *>(Path->GetBuffer())) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
 		}
 		void CreateSymbolicLink(const string & at, const string & to)
 		{
@@ -265,8 +266,8 @@ namespace Engine
 			if (free_bytes) *free_bytes = fss.f_bsize * fss.f_bfree;
 			if (user_available_bytes) *user_available_bytes = fss.f_bsize * fss.f_bavail;
 		}
-        string ExpandPath(const string & path)
-        {
+		string ExpandPath(const string & path)
+		{
 			string full;
 			if (path[0] == L'/' || path[0] == L'\\') full = path; else full = GetCurrentDirectory() + L"/" + path;
 			auto parts = full.Replace(L'\\', L'/').Split(L'/');
@@ -290,38 +291,38 @@ namespace Engine
 			for (int i = 0; i < parts.Length(); i++) result << L"/" << parts[i];
 			if (!result.Length()) result << L"/";
 			return result.ToString();
-        }
-        string GetCurrentDirectory(void)
-        {
-            SafePointer< Array<uint8> > Path = new Array<uint8>(PATH_MAX);
-            Path->SetLength(PATH_MAX);
-            do {
-                if (getcwd(reinterpret_cast<char *>(Path->GetBuffer()), Path->Length())) break;
-                if (errno == ENOENT) throw Exception();
-                else if (errno == ENOMEM) throw OutOfMemoryException();
-                else if (errno != ERANGE) throw FileAccessException(PosixErrorToEngineError(errno));
-                Path->SetLength(Path->Length() * 2);
-            } while(true);
-            return string(Path->GetBuffer(), -1, Encoding::UTF8);
-        }
-        void SetCurrentDirectory(const string & path)
-        {
-            SafePointer<Array<uint8> > FullPath = new Array<uint8>(PATH_MAX);
+		}
+		string GetCurrentDirectory(void)
+		{
+			SafePointer< Array<uint8> > Path = new Array<uint8>(PATH_MAX);
+			Path->SetLength(PATH_MAX);
+			do {
+				if (getcwd(reinterpret_cast<char *>(Path->GetBuffer()), Path->Length())) break;
+				if (errno == ENOENT) throw Exception();
+				else if (errno == ENOMEM) throw OutOfMemoryException();
+				else if (errno != ERANGE) throw FileAccessException(PosixErrorToEngineError(errno));
+				Path->SetLength(Path->Length() * 2);
+			} while(true);
+			return string(Path->GetBuffer(), -1, Encoding::UTF8);
+		}
+		void SetCurrentDirectory(const string & path)
+		{
+			SafePointer<Array<uint8> > FullPath = new Array<uint8>(PATH_MAX);
 			FullPath->SetLength(PATH_MAX);
-            SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
+			SafePointer<Array<uint8> > Path = Path::NormalizePath(path).EncodeSequence(Encoding::UTF8, true);
 			realpath(reinterpret_cast<char *>(Path->GetBuffer()), reinterpret_cast<char *>(FullPath->GetBuffer()));
-            if (chdir(reinterpret_cast<char *>(FullPath->GetBuffer())) != 0) throw FileAccessException(PosixErrorToEngineError(errno));
-        }
+			if (chdir(reinterpret_cast<char *>(FullPath->GetBuffer())) != 0) throw FileAccessException(PosixErrorToEngineError(errno));
+		}
 		string GetExecutablePath(void)
 		{
-            Array<uint8> Path(0x800);
-            Path.SetLength(0x800);
-            uint32 length = Path.Length();
-            if (_NSGetExecutablePath(reinterpret_cast<char *>(Path.GetBuffer()), &length) == -1) {
-                Path.SetLength(length);
-                _NSGetExecutablePath(reinterpret_cast<char *>(Path.GetBuffer()), &length);
-            }
-            return ExpandPath(string(Path.GetBuffer(), -1, Encoding::UTF8));
+			Array<uint8> Path(0x800);
+			Path.SetLength(0x800);
+			uint32 length = Path.Length();
+			if (_NSGetExecutablePath(reinterpret_cast<char *>(Path.GetBuffer()), &length) == -1) {
+				Path.SetLength(length);
+				_NSGetExecutablePath(reinterpret_cast<char *>(Path.GetBuffer()), &length);
+			}
+			return ExpandPath(string(Path.GetBuffer(), -1, Encoding::UTF8));
 		}
 		handle GetStandardOutput(void)
 		{
@@ -381,7 +382,7 @@ namespace Engine
 			}
 		}
 
-        namespace Search
+		namespace Search
 		{
 			namespace SearchHelper
 			{
@@ -456,26 +457,26 @@ namespace Engine
 			Time GetFileCreationTime(handle file)
 			{
 				struct stat info;
-            	if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-            	return Time::FromUnixTime(info.st_birthtimespec.tv_sec);
+				if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+				return Time::FromUnixTime(info.st_birthtimespec.tv_sec);
 			}
 			Time GetFileAccessTime(handle file)
 			{
 				struct stat info;
-            	if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-            	return Time::FromUnixTime(info.st_atimespec.tv_sec);
+				if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+				return Time::FromUnixTime(info.st_atimespec.tv_sec);
 			}
 			Time GetFileAlterTime(handle file)
 			{
 				struct stat info;
-            	if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
-            	return Time::FromUnixTime(info.st_mtimespec.tv_sec);
+				if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+				return Time::FromUnixTime(info.st_mtimespec.tv_sec);
 			}
 			void SetFileCreationTime(handle file, Time time) {}
 			void SetFileAccessTime(handle file, Time time)
 			{
 				struct stat info;
-            	if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+				if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
 				struct timeval times[2];
 				times[0].tv_sec = time.ToUnixTime();
 				times[0].tv_usec = 0;
@@ -486,7 +487,7 @@ namespace Engine
 			void SetFileAlterTime(handle file, Time time)
 			{
 				struct stat info;
-            	if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
+				if (fstat(reinterpret_cast<intptr>(file), &info) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
 				struct timeval times[2];
 				times[0].tv_sec = info.st_atimespec.tv_sec;
 				times[0].tv_usec = info.st_atimespec.tv_nsec / 1000;
@@ -495,5 +496,5 @@ namespace Engine
 				if (futimes(reinterpret_cast<intptr>(file), times) == -1) throw FileAccessException(PosixErrorToEngineError(errno));
 			}
 		}
-    }
+	}
 }
