@@ -125,6 +125,9 @@ namespace Engine
 					cmd += arg[i];
 				} else cmd += arg[i];
 			}
+			int req = 0;
+			for (int j = cmd.Length() - 1; j >= 0; j--) if (cmd[j] == L'\\') req++; else break;
+			for (int j = 0; j < req; j++) cmd += L'\\';
 			cmd += L'\"';
 		}
 	}
