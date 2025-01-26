@@ -118,8 +118,10 @@ namespace Engine
 			cmd += L'\"';
 			for (int i = 0; i < arg.Length(); i++) {
 				if (arg[i] == L'\"') {
-					cmd += arg[i];
-					cmd += arg[i];
+					int req = 0;
+					for (int j = cmd.Length() - 1; j >= 0; j--) if (cmd[j] == L'\\') req++; else break;
+					for (int j = 0; j < req; j++) cmd += L'\\';
+					cmd += L'\\';
 					cmd += arg[i];
 				} else cmd += arg[i];
 			}
