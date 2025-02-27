@@ -1339,6 +1339,7 @@ namespace Engine
 					return 0;
 				}
 				try {
+					auto level = device->GetFeatureLevel();
 					SafePointer<Streaming::Stream> stream = new Streaming::MemoryStream(data, length);
 					SafePointer<Storage::Archive> archive = Storage::OpenArchive(stream);
 					SafePointer<D3D11_DynamicShaderLibrary> library = new D3D11_DynamicShaderLibrary(this, device);
@@ -1358,8 +1359,19 @@ namespace Engine
 							SafePointer<DataBlock> entry = names[1].EncodeSequence(Encoding::ANSI, true);
 							const char * target;
 							ID3DBlob * shader;
-							if (type == ShaderType::Vertex) target = "vs_4_1";
-							else if (type == ShaderType::Pixel) target = "ps_4_1";
+							if (level == D3D_FEATURE_LEVEL_11_1) {
+								if (type == ShaderType::Vertex) target = "vs_5_0";
+								else if (type == ShaderType::Pixel) target = "ps_5_0";
+							} else if (level == D3D_FEATURE_LEVEL_11_0) {
+								if (type == ShaderType::Vertex) target = "vs_5_0";
+								else if (type == ShaderType::Pixel) target = "ps_5_0";
+							} else if (level == D3D_FEATURE_LEVEL_10_1) {
+								if (type == ShaderType::Vertex) target = "vs_4_1";
+								else if (type == ShaderType::Pixel) target = "ps_4_1";
+							} else {
+								if (type == ShaderType::Vertex) target = "vs_4_0";
+								else if (type == ShaderType::Pixel) target = "ps_4_0";
+							}
 							if (Compile(source->GetBuffer(), source->Length(), "", 0, 0, reinterpret_cast<char *>(entry->GetBuffer()),
 								target, D3DCOMPILE_PACK_MATRIX_ROW_MAJOR | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &shader, 0) != S_OK) {
 								if (error) *error = ShaderError::Compilation;
