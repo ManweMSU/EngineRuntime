@@ -802,7 +802,7 @@ namespace Engine
 		{
 			SafePointer<MTL_DeviceContext> context;
 
-			MTLBlendOperation _make_blend_op(BlendingFunction func)
+			static MTLBlendOperation _make_blend_op(BlendingFunction func)
 			{
 				if (func == BlendingFunction::Add) return MTLBlendOperationAdd;
 				else if (func == BlendingFunction::SubtractOverFromBase) return MTLBlendOperationReverseSubtract;
@@ -811,7 +811,7 @@ namespace Engine
 				else if (func == BlendingFunction::Max) return MTLBlendOperationMax;
 				else return MTLBlendOperationAdd;
 			}
-			MTLBlendFactor _make_blend_fact(BlendingFactor fact)
+			static MTLBlendFactor _make_blend_fact(BlendingFactor fact)
 			{
 				if (fact == BlendingFactor::Zero) return MTLBlendFactorZero;
 				else if (fact == BlendingFactor::One) return MTLBlendFactorOne;
@@ -830,17 +830,17 @@ namespace Engine
 				else if (fact == BlendingFactor::OverAlphaSaturated) return MTLBlendFactorSourceAlphaSaturated;
 				else return MTLBlendFactorZero;
 			}
-			MTLSamplerMinMagFilter _make_min_mag_filter(SamplerFilter filter)
+			static MTLSamplerMinMagFilter _make_min_mag_filter(SamplerFilter filter)
 			{
 				if (filter == SamplerFilter::Point) return MTLSamplerMinMagFilterNearest;
 				else return MTLSamplerMinMagFilterLinear;
 			}
-			MTLSamplerMipFilter _make_mip_filter(SamplerFilter filter)
+			static MTLSamplerMipFilter _make_mip_filter(SamplerFilter filter)
 			{
 				if (filter == SamplerFilter::Point) return MTLSamplerMipFilterNearest;
 				else return MTLSamplerMipFilterLinear;
 			}
-			MTLSamplerAddressMode _make_address_mode(SamplerAddressMode mode)
+			static MTLSamplerAddressMode _make_address_mode(SamplerAddressMode mode)
 			{
 				if (mode == SamplerAddressMode::Wrap) return MTLSamplerAddressModeRepeat;
 				else if (mode == SamplerAddressMode::Mirror) return MTLSamplerAddressModeMirrorRepeat;
@@ -848,7 +848,7 @@ namespace Engine
 				else if (mode == SamplerAddressMode::Border) return MTLSamplerAddressModeClampToBorderColor;
 				else return MTLSamplerAddressModeRepeat;
 			}
-			MTLCompareFunction _make_comp_func(CompareFunction func)
+			static MTLCompareFunction _make_comp_func(CompareFunction func)
 			{
 				if (func == CompareFunction::Always) return MTLCompareFunctionAlways;
 				else if (func == CompareFunction::Lesser) return MTLCompareFunctionLess;
@@ -860,7 +860,7 @@ namespace Engine
 				else if (func == CompareFunction::Never) return MTLCompareFunctionNever;
 				else return MTLCompareFunctionNever;
 			}
-			MTLStencilOperation _make_stencil_func(StencilFunction func)
+			static MTLStencilOperation _make_stencil_func(StencilFunction func)
 			{
 				if (func == StencilFunction::Keep) return MTLStencilOperationKeep;
 				else if (func == StencilFunction::SetZero) return MTLStencilOperationZero;
@@ -871,6 +871,13 @@ namespace Engine
 				else if (func == StencilFunction::DecrementClamp) return MTLStencilOperationDecrementClamp;
 				else if (func == StencilFunction::Invert) return MTLStencilOperationInvert;
 				else return MTLStencilOperationKeep;
+			}
+			static void _evaluate_mipmap_size(uint level, VolumeIndex & index)
+			{
+				while (level) { index.x >>= 1; index.y >>= 1; index.z >>= 1; level--; }
+				if (!index.x) index.x = 1;
+				if (!index.y) index.y = 1;
+				if (!index.z) index.z = 1;
 			}
 		public:
 			id<MTLDevice> device;
@@ -896,7 +903,7 @@ namespace Engine
 			{
 				tech = L"Metal";
 				if ([device supportsFamily: MTLGPUFamilyMac2]) version = 2;
-				else if ([device supportsFamily: MTLGPUFamilyMac1]) version = 2;
+				else if ([device supportsFamily: MTLGPUFamilyMac1]) version = 1;
 				else version = 0;
 			}
 			virtual IShaderLibrary * LoadShaderLibrary(const void * data, int length) noexcept override
@@ -1349,32 +1356,32 @@ namespace Engine
 				if (desc.Type == TextureType::Type1D || desc.Type == TextureType::TypeArray1D) {
 					for (uint j = 0; j < texture->size; j++) for (uint i = 0; i < mips; i++) {
 						uint subres = i + j * mips;
-						uint mw = texture->width, k = i;
-						while (k) { mw >>= 1; k--; }
-						[texture->texture replaceRegion: MTLRegionMake1D(0, mw) mipmapLevel: i slice: j
+						VolumeIndex size(texture->width);
+						_evaluate_mipmap_size(i, size);
+						[texture->texture replaceRegion: MTLRegionMake1D(0, size.x) mipmapLevel: i slice: j
 							withBytes: init[subres].Data bytesPerRow: 0 bytesPerImage: 0];
 					}
 				} else if (desc.Type == TextureType::Type2D || desc.Type == TextureType::TypeArray2D) {
 					for (uint j = 0; j < texture->size; j++) for (uint i = 0; i < mips; i++) {
 						uint subres = i + j * mips;
-						uint mw = texture->width, mh = texture->height, k = i;
-						while (k) { mw >>= 1; mh >>= 1; k--; }
-						[texture->texture replaceRegion: MTLRegionMake2D(0, 0, mw, mh) mipmapLevel: i slice: j
+						VolumeIndex size(texture->width, texture->height);
+						_evaluate_mipmap_size(i, size);
+						[texture->texture replaceRegion: MTLRegionMake2D(0, 0, size.x, size.y) mipmapLevel: i slice: j
 							withBytes: init[subres].Data bytesPerRow: init[subres].DataPitch bytesPerImage: 0];
 					}
 				} else if (desc.Type == TextureType::TypeCube || desc.Type == TextureType::TypeArrayCube) {
 					for (uint j = 0; j < texture->size * 6; j++) for (uint i = 0; i < mips; i++) {
 						uint subres = i + j * mips;
-						uint mw = texture->width, mh = texture->height, k = i;
-						while (k) { mw >>= 1; mh >>= 1; k--; }
-						[texture->texture replaceRegion: MTLRegionMake2D(0, 0, mw, mh) mipmapLevel: i slice: j
+						VolumeIndex size(texture->width, texture->height);
+						_evaluate_mipmap_size(i, size);
+						[texture->texture replaceRegion: MTLRegionMake2D(0, 0, size.x, size.y) mipmapLevel: i slice: j
 							withBytes: init[subres].Data bytesPerRow: init[subres].DataPitch bytesPerImage: 0];
 					}
 				} else if (desc.Type == TextureType::Type3D) {
 					for (uint i = 0; i < mips; i++) {
-						uint mw = texture->width, mh = texture->height, md = texture->depth, k = i;
-						while (k) { mw >>= 1; mh >>= 1; md >>= 1; k--; }
-						[texture->texture replaceRegion: MTLRegionMake3D(0, 0, 0, mw, mh, md)
+						VolumeIndex size(texture->width, texture->height, texture->depth);
+						_evaluate_mipmap_size(i, size);
+						[texture->texture replaceRegion: MTLRegionMake3D(0, 0, 0, size.x, size.y, size.z)
 							mipmapLevel: i slice: 0 withBytes: init[i].Data bytesPerRow: init[i].DataPitch bytesPerImage: init[i].DataSlicePitch];
 					}
 				}
