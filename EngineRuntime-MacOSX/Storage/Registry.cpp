@@ -112,10 +112,12 @@ namespace Engine
 			}
 			RegistryValue & operator = (RegistryValue && src)
 			{
+				if (this == &src) return *this;
 				if (type == RegistryValueType::String || type == RegistryValueType::Binary) free(value_binary);
 				type = src.type;
 				MemoryCopy(value, src.value, sizeof(value));
 				ZeroMemory(src.value, sizeof(value));
+				return *this;
 			}
 			void SetBinarySize(int size)
 			{
