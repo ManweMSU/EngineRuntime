@@ -22,7 +22,7 @@ namespace Engine
 			CocoaPointer< id<MTLTexture> > _surface;
 			int _width, _height;
 		public:
-			MTL_Bitmap(IBitmap * base, I2DDeviceContext * mtl_context) : _base(base), _parent(mtl_context) { if (!Reload()) throw Exception(); }
+			MTL_Bitmap(IBitmap * base, I2DDeviceContext * mtl_context) : _base(base), _parent(mtl_context), _width(-1), _height(-1) { if (!Reload()) throw Exception(); }
 			virtual ~MTL_Bitmap(void) override {}
 			virtual int GetWidth(void) const noexcept override { return _width; }
 			virtual int GetHeight(void) const noexcept override { return _height; }
