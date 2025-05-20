@@ -983,7 +983,7 @@ namespace Engine
 						if (self->_layer_flags & 1) if (self->_callback) self->_callback->RenderWindow(self);
 						if (self->_layer_flags & 2) self->_render_callback(self->_layer, self);
 						if (self->_first_time_render) {
-							self->_first_time_render = true;
+							self->_first_time_render = false;
 							GetWindowSystem()->SubmitTask(CreateFunctionalTask([w = wnd]() { InvalidateRect(w, 0, FALSE); }));
 						}
 						return 0;
