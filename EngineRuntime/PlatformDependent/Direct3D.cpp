@@ -1359,10 +1359,7 @@ namespace Engine
 							SafePointer<DataBlock> entry = names[1].EncodeSequence(Encoding::ANSI, true);
 							const char * target;
 							ID3DBlob * shader;
-							if (level == D3D_FEATURE_LEVEL_11_1) {
-								if (type == ShaderType::Vertex) target = "vs_5_0";
-								else if (type == ShaderType::Pixel) target = "ps_5_0";
-							} else if (level == D3D_FEATURE_LEVEL_11_0) {
+							if (level >= D3D_FEATURE_LEVEL_11_0) {
 								if (type == ShaderType::Vertex) target = "vs_5_0";
 								else if (type == ShaderType::Pixel) target = "ps_5_0";
 							} else if (level == D3D_FEATURE_LEVEL_10_1) {
