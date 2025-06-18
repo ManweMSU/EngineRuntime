@@ -1396,6 +1396,7 @@ namespace Engine
 				while (s > 1) { s /= 2; r++; }
 				return r;
 			}
+			bool _is_valid_generate_mipmaps_format(DXGI_FORMAT format) noexcept { UINT status; if (device->CheckFormatSupport(format, &status) == S_OK) return (status & D3D11_FORMAT_SUPPORT_MIP_AUTOGEN) != 0; else return false; }
 		public:
 			D3D11_Device(ID3D11Device * _device, IDeviceFactory * _parent) { context = new D3D11_DeviceContext(_device, this); device = _device; device->AddRef(); video_acceleration = 0; parent_factory.SetRetain(_parent); }
 			virtual ~D3D11_Device(void) override { if (video_acceleration) video_acceleration->Release(); context->Release(); device->Release(); }
@@ -1857,6 +1858,7 @@ namespace Engine
 				result->pool = desc.MemoryPool;
 				if ((desc.Usage & ResourceUsageRenderTarget) && !IsColorFormat(desc.Format)) return 0;
 				if ((desc.Usage & ResourceUsageDepthStencil) && !IsDepthStencilFormat(desc.Format)) return 0;
+				if (desc.MemoryPool == ResourceMemoryPool::Shared && (desc.Usage & (ResourceUsageCPUAll | ResourceUsageVideoAll))) return 0;
 				result->usage_flags |= ResourceUsageVideoAll;
 				if (desc.Type == TextureType::Type1D || desc.Type == TextureType::TypeArray1D) {
 					D3D11_TEXTURE1D_DESC td;
@@ -1881,7 +1883,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					if (desc.MemoryPool == ResourceMemoryPool::Shared) td.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -1942,7 +1944,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					if (desc.MemoryPool == ResourceMemoryPool::Shared) td.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -2005,7 +2007,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					if (desc.MemoryPool == ResourceMemoryPool::Shared) td.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -2065,7 +2067,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					if (desc.MemoryPool == ResourceMemoryPool::Shared) td.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -2152,7 +2154,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					auto sr = _make_subres_data(init, td.MipLevels * td.ArraySize);
@@ -2216,7 +2218,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					auto sr = _make_subres_data(init, td.MipLevels * td.ArraySize);
@@ -2282,7 +2284,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					auto sr = _make_subres_data(init, td.MipLevels * td.ArraySize);
@@ -2345,7 +2347,7 @@ namespace Engine
 					}
 					td.CPUAccessFlags = 0;
 					td.MiscFlags = 0;
-					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget)) {
+					if ((desc.Usage & ResourceUsageShaderRead) && (desc.Usage & ResourceUsageRenderTarget) && _is_valid_generate_mipmaps_format(dxgi_format)) {
 						td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
 					}
 					auto sr = _make_subres_data(init, td.MipLevels);
