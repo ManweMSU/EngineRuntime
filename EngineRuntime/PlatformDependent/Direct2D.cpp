@@ -770,7 +770,7 @@ namespace Engine
 		ID2D1RenderTarget * D2D_DeviceContext::GetRenderTarget(void) const noexcept { return _render_target; }
 		void D2D_DeviceContext::ClippingUndo(void) noexcept { for (auto & c : _clipping) _render_target->PopAxisAlignedClip(); }
 		void D2D_DeviceContext::ClippingRedo(void) noexcept { for (auto & c : _clipping) _render_target->PushAxisAlignedClip(D2D1::RectF(float(c.Left), float(c.Top), float(c.Right), float(c.Bottom)), D2D1_ANTIALIAS_MODE_ALIASED); }
-		void D2D_DeviceContext::GetImplementationInfo(string & tech, uint32 & version) { tech = L"Direct2D"; version = 1; }
+		void D2D_DeviceContext::GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) { try { tech = L"Direct2D"; } catch (...) {} version_major = 1; version_minor = _render_target_ex ? 1 : 0; }
 		uint32 D2D_DeviceContext::GetFeatureList(void) noexcept
 		{
 			uint32 result = DeviceContextFeaturePolygonCapable | DeviceContextFeatureLayersCapable;
@@ -887,7 +887,7 @@ namespace Engine
 			if (texture->GetTextureType() != Graphics::TextureType::Type2D) return 0;
 			if (texture->GetPixelFormat() != Graphics::PixelFormat::B8G8R8A8_unorm) return 0;
 			if (texture->GetMipmapCount() != 1) return 0;
-			auto resource = static_cast<ID3D11Texture2D *>(Direct3D::QueryInnerObject(texture));
+			auto resource = static_cast<ID3D11Texture2D *>(Direct3D::GetInnerObject(texture));
 			IDXGISurface * surface = 0;
 			if (resource->QueryInterface(__uuidof(IDXGISurface), reinterpret_cast<void **>(&surface)) != S_OK) return 0;
 			D2D1_BITMAP_PROPERTIES props;

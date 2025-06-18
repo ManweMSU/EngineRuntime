@@ -36,6 +36,7 @@ namespace Engine
 	Array<string> * GetCommandLine(void);
 	void Sleep(uint32 time) noexcept;
 	void ExitProcess(int exit_code) noexcept;
+	bool IsProcessElevated(void) noexcept;
 
 	RunningProcess * OpenProcess(int pid) noexcept;
 	int GetThisProcessPID(void) noexcept;

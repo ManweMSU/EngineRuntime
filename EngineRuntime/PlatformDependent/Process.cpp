@@ -216,6 +216,18 @@ namespace Engine
 	}
 	void Sleep(uint32 time) noexcept { ::Sleep(time); }
 	void ExitProcess(int exit_code) noexcept { ::ExitProcess(exit_code); }
+	bool IsProcessElevated(void) noexcept
+	{
+		bool result = false;
+		HANDLE token;
+		if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+			TOKEN_ELEVATION state;
+			DWORD size = sizeof(state);
+			if (GetTokenInformation(token, TokenElevation, &state, sizeof(state), &size)) result = state.TokenIsElevated;
+			CloseHandle(token);
+		}
+		return result;
+	}
 	RunningProcess * OpenProcess(int pid) noexcept
 	{
 		try {

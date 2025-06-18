@@ -47,7 +47,7 @@ namespace Engine
 			void ClippingUndo(void) noexcept;
 			void ClippingRedo(void) noexcept;
 			// Core feature API
-			virtual void GetImplementationInfo(string & tech, uint32 & version) override;
+			virtual void GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) override;
 			virtual uint32 GetFeatureList(void) noexcept override;
 			virtual string ToString(void) const override;
 			// Brush factory API

@@ -68,7 +68,7 @@ namespace Engine
 				if (CreateDXGIDeviceManager(&token, &manager) != S_OK) { dxgi_device->Release(); return 0; }
 				if (manager->ResetDevice(dxgi_device, token) != S_OK) { manager->Release(); dxgi_device->Release(); return 0; }
 				dxgi_device->Release();
-				auto d3d11_device = Direct3D::GetD3D11Device(device);
+				auto d3d11_device = Direct3D::GetInnerObject(device);
 				ID3D10Multithread * multithreaded;
 				if (d3d11_device->QueryInterface(IID_PPV_ARGS(&multithreaded)) != S_OK) { manager->Release(); return 0; }
 				multithreaded->SetMultithreadProtected(TRUE);
@@ -259,7 +259,7 @@ namespace Engine
 				if (!EnableVideoSurfaceInterop() || !CreateDXGISurfaceBuffer) return 0;
 				IMFMediaBuffer * buffer;
 				UINT sr = D3D11CalcSubresource(subres.mip_level, subres.array_index, texture->GetMipmapCount());
-				if (CreateDXGISurfaceBuffer(IID_ID3D11Texture2D, Direct3D::GetD3D11Texture2D(texture), sr, TRUE, &buffer) != S_OK) return 0;
+				if (CreateDXGISurfaceBuffer(IID_ID3D11Texture2D, Direct3D::GetInnerObject2D(texture), sr, TRUE, &buffer) != S_OK) return 0;
 				IMFSample * sample;
 				if (MFCreateSample(&sample) != S_OK) { buffer->Release(); return 0; }
 				if (sample->AddBuffer(buffer) != S_OK) { buffer->Release(); sample->Release(); return 0; }
@@ -362,7 +362,7 @@ namespace Engine
 						if (_transform->ProcessInput(0, sample, 0) != S_OK) { sample->Release(); return false; }
 						sample->Release();
 					} else {
-						auto device = Direct3D::GetD3D11Device(from->GetParentDevice());
+						auto device = Direct3D::GetInnerObject(from->GetParentDevice());
 						D3D11_TEXTURE2D_DESC desc2d;
 						desc2d.Width = from->GetWidth();
 						desc2d.Height = from->GetHeight();
@@ -385,8 +385,8 @@ namespace Engine
 					box.right = from->GetWidth();
 					box.bottom = from->GetHeight();
 					box.back = 1;
-					Direct3D::GetD3D11Device(from->GetParentDevice())->GetImmediateContext(&context);
-					context->CopySubresourceRegion(_transition_surface, 0, 0, 0, 0, Direct3D::GetD3D11Texture2D(from),
+					Direct3D::GetInnerObject(from->GetParentDevice())->GetImmediateContext(&context);
+					context->CopySubresourceRegion(_transition_surface, 0, 0, 0, 0, Direct3D::GetInnerObject2D(from),
 						D3D11CalcSubresource(subres.mip_level, subres.array_index, from->GetMipmapCount()), &box);
 					if (!_cached_sample) {
 						auto length = box.right * box.bottom * 4;
@@ -478,10 +478,10 @@ namespace Engine
 					UINT src_subres;
 					UINT dest_subres = D3D11CalcSubresource(subres.mip_level, subres.array_index, dest->GetMipmapCount());
 					if (!_get_surface(output.pSample, &surface, &src_subres)) { output.pSample->Release(); return false; }
-					auto device = Direct3D::GetD3D11Device(_output_device);
+					auto device = Direct3D::GetInnerObject(_output_device);
 					ID3D11DeviceContext * context;
 					device->GetImmediateContext(&context);
-					context->CopySubresourceRegion(Direct3D::GetD3D11Texture2D(dest), dest_subres, 0, 0, 0, surface, src_subres, 0);
+					context->CopySubresourceRegion(Direct3D::GetInnerObject2D(dest), dest_subres, 0, 0, 0, surface, src_subres, 0);
 					context->Release();
 					surface->Release();
 					output.pSample->Release();
@@ -507,7 +507,7 @@ namespace Engine
 					output.pSample = _cached_sample;
 					if (_transform->ProcessOutput(0, 1, &output, &status) != S_OK) { output.pSample->Release(); return false; }
 					if (output.pEvents) output.pEvents->Release();
-					auto device = Direct3D::GetD3D11Device(dest->GetParentDevice());
+					auto device = Direct3D::GetInnerObject(dest->GetParentDevice());
 					IMFMediaBuffer * buffer;
 					if (_cached_sample->GetBufferByIndex(0, &buffer) != S_OK) return false;
 					uint8 * pdata_src;
@@ -520,7 +520,7 @@ namespace Engine
 					box.bottom = dest->GetHeight();
 					box.back = 1;
 					UINT sr = D3D11CalcSubresource(subres.mip_level, subres.array_index, dest->GetMipmapCount());
-					context->UpdateSubresource(Direct3D::GetD3D11Texture2D(dest), sr, &box, pdata_src, box.right * 4, 0);
+					context->UpdateSubresource(Direct3D::GetInnerObject2D(dest), sr, &box, pdata_src, box.right * 4, 0);
 					buffer->Unlock();
 					buffer->Release();
 					return true;
@@ -1473,9 +1473,9 @@ namespace Engine
 								_device_surface = _desc.Device->CreateTexture(td);
 							}
 							if (_device_surface) {
-								auto surface_to = Direct3D::GetD3D11Texture2D(_device_surface);
+								auto surface_to = Direct3D::GetInnerObject2D(_device_surface);
 								ID3D11DeviceContext * context;
-								Direct3D::GetD3D11Device(_desc.Device)->GetImmediateContext(&context);
+								Direct3D::GetInnerObject(_desc.Device)->GetImmediateContext(&context);
 								context->CopySubresourceRegion(surface_to, 0, 0, 0, 0, surface, 0, 0);
 								context->Release();
 								result = MediaFoundationFrameBlt::MakeDXGISample(_device_surface, Graphics::SubresourceIndex(0, 0));
@@ -1601,7 +1601,7 @@ namespace Engine
 					UINT adapter_number = 0;
 					IDXGIAdapter * adapter;
 					IDXGIOutput1 * output_capture = 0;
-					while (Direct3D::DXGIFactory->EnumAdapters(adapter_number, &adapter) == S_OK) {
+					while (Direct3D::GetInnerObject(Direct3D::CommonFactory)->EnumAdapters(adapter_number, &adapter) == S_OK) {
 						UINT output_number = 0;
 						IDXGIOutput * output;
 						while (adapter->EnumOutputs(output_number, &output) == S_OK) {
@@ -1616,7 +1616,7 @@ namespace Engine
 						if (output_capture) break;
 					}
 					if (output_capture) {
-						if (output_capture->DuplicateOutput(Direct3D::GetD3D11Device(device), &_duplication) == S_OK) {
+						if (output_capture->DuplicateOutput(Direct3D::GetInnerObject(device), &_duplication) == S_OK) {
 							_desc.Device = device;
 							_desc.Device->Retain();
 						}

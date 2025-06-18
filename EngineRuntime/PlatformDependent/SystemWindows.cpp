@@ -6,7 +6,7 @@
 #include "../PlatformSpecific/WindowsRegistry.h"
 #include "Direct3D.h"
 #include "Direct2D.h"
-#include "EffectPlugin.h"
+#include "WindowLayers.h"
 
 #include <Windows.h>
 #include <ShlObj.h>
@@ -40,7 +40,6 @@ namespace Engine
 	namespace Windows
 	{
 		// Accessory
-		typedef void (* func_RenderLayerCallback) (IPresentationEngine * engine, IWindow * window);
 		HBITMAP _create_bitmap(Codec::Frame * frame, bool premultiplied)
 		{
 			SafePointer<Codec::Frame> data;
@@ -132,11 +131,6 @@ namespace Engine
 			}
 			if (flags & WindowFlagNonOpaque) ex_style |= WS_EX_LAYERED;
 		}
-		void _get_window_render_flags(IWindow * window, int * fx_flags, Color * clear_color, MARGINS ** margins);
-		void _set_window_render_callback(IWindow * window, func_RenderLayerCallback callback);
-		void _set_window_user_render_callback(ICoreWindow * window) { _set_window_render_callback(static_cast<IWindow *>(window), 0); }
-		void _get_window_layers(ICoreWindow * window, HLAYERS * layers, double * factor);
-		void _set_window_layers(ICoreWindow * window, HLAYERS layers);
 
 		// Screen API
 		class SystemScreen : public IScreen
@@ -298,13 +292,13 @@ namespace Engine
 			HWND _window_handle;
 			HBITMAP _bitmap;
 
-			static void Render(IPresentationEngine * _self, IWindow * window)
+			static void Render(IPresentationEngine * _self, ICoreWindow * window)
 			{
 				auto self = static_cast<SystemBackbufferedPresentationEngine *>(_self);
 				MARGINS * margins;
-				int fx_flags;
+				uint fx_flags;
 				Color color;
-				_get_window_render_flags(window, &fx_flags, &color, &margins);
+				GetWindowSurfaceFlags(window, &fx_flags, &color, &margins);
 				RECT rect;
 				GetClientRect(self->_window_handle, &rect);
 				HDC dc = GetDC(self->_window_handle);
@@ -398,7 +392,7 @@ namespace Engine
 			{
 				_window_object = static_cast<IWindow *>(window);
 				_window_handle = reinterpret_cast<HWND>(window->GetOSHandle());
-				_set_window_render_callback(_window_object, Render);
+				SetWindowRenderingCallback(_window_object, Render);
 			}
 			virtual void Detach(void) override { if (_bitmap) DeleteObject(_bitmap); _bitmap = 0; _window_object = 0; _window_handle = 0; }
 			virtual void Invalidate(void) override { UpdateBitmap(); InvalidateRect(_window_handle, 0, FALSE); }
@@ -419,7 +413,7 @@ namespace Engine
 			SafePointer<Direct2D::D2D_DeviceContext> _device;
 			bool _crashed;
 			DeviceClass _device_class;
-			HLAYERS _layers;
+			SafePointer<IWindowLayers> _layers;
 
 			bool _init_d2d_ex(void)
 			{
@@ -427,7 +421,7 @@ namespace Engine
 					if (!Direct3D::CreateD2DDeviceContextForWindow(_window, _render_target_ex.InnerRef(), _swap_chain_ex.InnerRef())) return false;
 					_device = new Direct2D::D2D_DeviceContext;
 					_device->SetRenderTargetEx(_render_target_ex);
-					_device->SetWrappedDevice(Direct3D::WrappedDevice);
+					_device->SetWrappedDevice(Direct3D::CommonDevice);
 					_crashed = false;
 					return true;
 				} catch (...) { return false; }
@@ -439,7 +433,7 @@ namespace Engine
 					if (!Direct3D::CreateSwapChainDevice(_swap_chain, _render_target_d3d.InnerRef())) { _swap_chain.SetReference(0); return false; }
 					_device = new Direct2D::D2D_DeviceContext;
 					_device->SetRenderTarget(_render_target_d3d);
-					_device->SetWrappedDevice(Direct3D::WrappedDevice);
+					_device->SetWrappedDevice(Direct3D::CommonDevice);
 					_crashed = false;
 					return true;
 				} catch (...) { return false; }
@@ -471,33 +465,29 @@ namespace Engine
 				} catch (...) { return false; }
 			}
 		public:
-			System2DRenderingDevice(DeviceClass device_class) : _device_class(device_class), _window(0), _object(0), _crashed(true), _layers(0) {}
-			virtual ~System2DRenderingDevice(void) override { if (_layers) Effect::ReleaseLayers(_layers); }
+			System2DRenderingDevice(DeviceClass device_class) : _device_class(device_class), _window(0), _object(0), _crashed(true) {}
+			virtual ~System2DRenderingDevice(void) override {}
 			virtual void Attach(ICoreWindow * window) override
 			{
 				_window = reinterpret_cast<HWND>(window->GetOSHandle());
 				_object = static_cast<IWindow *>(window);
 				Codec::InitializeDefaultCodecs();
 				Direct2D::InitializeFactory();
-				Direct3D::CreateDevices();
+				Direct3D::CreateCommonDevice();
 				if (_object->GetBackgroundFlags() & WindowFlagTransparent) {
-					HLAYERS current;
 					double factor;
-					_get_window_layers(_object, &current, &factor);
+					GetWindowLayers(_object, 0, &factor);
 					auto size = _object->GetClientSize();
-					Effect::CreateEngineEffectLayersDesc desc;
+					CreateWindowLayersDesc desc;
 					desc.window = _window;
-					desc.device = Direct3D::D3DDevice;
-					desc.layer_flags = Effect::CreateEngineEffectTransparentBackground;
-					if (_object->GetBackgroundFlags() & WindowFlagBlurBehind) desc.layer_flags |= Effect::CreateEngineEffectBlurBehind;
+					desc.flags = CreateWindowLayersAlphaModePremultiplied | CreateWindowLayersTransparentBackground | CreateWindowLayersFormatB8G8R8A8;
+					if (_object->GetBackgroundFlags() & WindowFlagBlurBehind) desc.flags |= CreateWindowLayersBlurBehind;
+					desc.device = Direct3D::GetInnerObject(Direct3D::CommonDevice);;
 					desc.width = size.x;
 					desc.height = size.y;
 					desc.deviation = factor;
-					_layers = Effect::CreateLayers(&desc);
-					if (_layers) {
-						_set_window_layers(_object, _layers);
-						Resize(size.x, size.y);
-					}
+					_layers = Windows::CreateWindowLayers(desc);
+					if (_layers) { SetWindowLayers(_object, _layers); Resize(size.x, size.y); }
 				} else {
 					if (_device_class == DeviceClass::DontCare) {
 						if (!_init_d2d_ex()) if (!_init_d3d()) _init_d2d();
@@ -507,7 +497,7 @@ namespace Engine
 						_init_d2d();
 					}
 				}
-				_set_window_render_callback(_object, 0);
+				SetWindowRenderingCallback(_object, 0);
 			}
 			virtual void Detach(void) override
 			{
@@ -520,16 +510,13 @@ namespace Engine
 				_surface.SetReference(0);
 				_layer_surface.SetReference(0);
 				_window = 0; _object = 0;
-				if (_layers) {
-					Effect::ReleaseLayers(_layers);
-					_layers = 0;
-				}
+				if (_layers)  _layers.SetReference(0);
 			}
 			virtual void Invalidate(void) override { InvalidateRect(_window, 0, FALSE); }
 			virtual void Resize(int width, int height) override
 			{
 				if (_layers) {
-					Effect::ResizeLayers(_layers, width, height);
+					_layers->Resize(width, height);
 					Graphics::TextureDesc desc;
 					ZeroMemory(&desc, sizeof(desc));
 					desc.Type = Graphics::TextureType::Type2D;
@@ -539,17 +526,17 @@ namespace Engine
 					desc.MipmapCount = 1;
 					desc.Usage = Graphics::ResourceUsageRenderTarget | Graphics::ResourceUsageShaderRead;
 					desc.MemoryPool = Graphics::ResourceMemoryPool::Default;
-					_surface = Direct3D::WrappedDevice->CreateTexture(desc);
+					_surface = Direct3D::CommonDevice->CreateTexture(desc);
 					if (_surface && !_render_target_ex) {
-						Direct3D::D2DDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, _render_target_ex.InnerRef());
+						Direct3D::GetInnerObject2D(Direct3D::CommonDevice)->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, _render_target_ex.InnerRef());
 						_device = new Direct2D::D2D_DeviceContext;
 						_device->SetRenderTargetEx(_render_target_ex);
-						_device->SetWrappedDevice(Direct3D::WrappedDevice);
+						_device->SetWrappedDevice(Direct3D::CommonDevice);
 						_crashed = false;
 					}
 					if (_surface && _render_target_ex) {
 						IDXGISurface * dxgi;
-						if (Direct3D::GetD3D11Texture2D(_surface)->QueryInterface(IID_PPV_ARGS(&dxgi)) == S_OK) {
+						if (Direct3D::GetInnerObject2D(_surface)->QueryInterface(IID_PPV_ARGS(&dxgi)) == S_OK) {
 							D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
 								D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 0.0f, 0.0f);
 							ID2D1Bitmap1 * bitmap;
@@ -587,12 +574,12 @@ namespace Engine
 				else if (_render_target) target = _render_target;
 				if (!target || _crashed) return false;
 				_layer_surface.SetReference(0);
-				if (_layers && !Effect::BeginDraw(_layers, _layer_surface.InnerRef(), &orgx, &orgy)) return false;
+				if (_layers && !_layers->BeginDraw(_layer_surface.InnerRef(), &orgx, &orgy)) return false;
 				target->SetDpi(96.0f, 96.0f);
 				target->BeginDraw();
-				int render_flags;
+				uint render_flags;
 				Color clear_color;
-				_get_window_render_flags(_object, &render_flags, &clear_color, 0);
+				GetWindowSurfaceFlags(_object, &render_flags, &clear_color, 0);
 				if (render_flags & 4) target->Clear(D2D1::ColorF(clear_color.r / 255.0f, clear_color.g / 255.0f, clear_color.b / 255.0f, clear_color.a / 255.0f));
 				return true;
 			}
@@ -601,16 +588,16 @@ namespace Engine
 				if (_layers) {
 					if (_render_target_ex && _render_target_ex->EndDraw() != S_OK) { _crashed = true; return false; }
 					ID3D11DeviceContext * context;
-					Direct3D::D3DDevice->GetImmediateContext(&context);
+					Direct3D::GetInnerObject(Direct3D::CommonDevice)->GetImmediateContext(&context);
 					D3D11_BOX box;
 					box.left = box.top = box.front = 0;
 					box.right = _surface->GetWidth();
 					box.bottom = _surface->GetHeight();
 					box.back = 1;
-					context->CopySubresourceRegion(_layer_surface, 0, orgx, orgy, 0, Direct3D::GetD3D11Texture2D(_surface), 0, &box);
+					context->CopySubresourceRegion(_layer_surface, 0, orgx, orgy, 0, Direct3D::GetInnerObject2D(_surface), 0, &box);
 					context->Flush();
 					_layer_surface.SetReference(0);
-					Effect::EndDraw(_layers);
+					_layers->EndDraw();
 				} else {
 					if (_render_target_ex) {
 						if (_render_target_ex->EndDraw() != S_OK) { _crashed = true; return false; } else if (_swap_chain_ex->Present(1, 0) != S_OK) { _crashed = true; return false; }
@@ -632,7 +619,7 @@ namespace Engine
 			Color _filling;
 			ImageRenderMode _mode;
 
-			static void _render_layer_callback(IPresentationEngine * engine, IWindow * window)
+			static void _render_layer_callback(IPresentationEngine * engine, ICoreWindow * window)
 			{
 				auto & self = *static_cast<SystemLayeredPresentationEngine *>(engine);
 				auto device = self.GetContext();
@@ -648,7 +635,7 @@ namespace Engine
 						int h = self._texture->GetHeight();
 						self._info = device->CreateBitmapBrush(self._texture, Box(0, 0, w, h), false);
 					}
-					auto size = window->GetClientSize();
+					auto size = static_cast<IWindow *>(window)->GetClientSize();
 					auto at = Box(0, 0, size.x, size.y);
 					if (self._bar) device->Render(self._bar, at);
 					if (self._info) {
@@ -704,7 +691,7 @@ namespace Engine
 			virtual void Attach(ICoreWindow * window) override
 			{
 				System2DRenderingDevice::Attach(window);
-				_set_window_render_callback(static_cast<IWindow *>(window), _render_layer_callback);
+				SetWindowRenderingCallback(window, _render_layer_callback);
 			}
 			virtual void Detach(void) override
 			{
@@ -915,16 +902,17 @@ namespace Engine
 		class SystemWindow : public IWindow
 		{
 			friend class WindowSystem;
-			friend void _get_window_render_flags(IWindow * window, int * fx_flags, Color * clear_color, MARGINS ** margins);
-			friend void _set_window_render_callback(IWindow * window, func_RenderLayerCallback callback);
-			friend void _get_window_layers(ICoreWindow * window, HLAYERS * layers, double * factor);
-			friend void _set_window_layers(ICoreWindow * window, HLAYERS layers);
+			friend void GetWindowSurfaceFlags(ICoreWindow * window, uint * mode, Color * clear_color, MARGINS ** margins) noexcept;
+			friend void SetWindowRenderingCallback(ICoreWindow * window, func_RenderLayerCallback callback) noexcept;
+			friend void SetWindowUserRenderingCallback(ICoreWindow * window) noexcept;
+			friend void SetWindowLayers(ICoreWindow * window, IWindowLayers * layers) noexcept;
+			friend void GetWindowLayers(ICoreWindow * window, IWindowLayers ** layers, double * factor) noexcept;
 
 			HWND _window;
 			ITaskbarList3 * _taskbar;
 			IWindowCallback * _callback;
 			SafePointer<IPresentationEngine> _layer;
-			HLAYERS _layered;
+			SafePointer<IWindowLayers> _layered;
 			SystemWindow * _parent;
 			Array<SystemWindow *> _children;
 			Point _min_constraints;
@@ -949,7 +937,7 @@ namespace Engine
 				if (DwmIsCompositionEnabled(&dwm_enabled) != S_OK) return;
 				if (dwm_enabled) {
 					if (_effect_flags & 0xA) {
-						if (Effect::Init()) {
+						if (Windows::LayeredSubsystemInitialize()) {
 							if (_effect_flags & 0x2) _effective_flags |= WindowFlagBlurBehind | WindowFlagBlurFactor;
 							if (_effect_flags & 0x8) _effective_flags |= WindowFlagTransparent;
 						} else {
@@ -1188,7 +1176,7 @@ namespace Engine
 				}
 				if (desc.Flags & WindowFlagWindowsExtendedFrame) _effect_flags |= 1;
 				if (desc.Flags & WindowFlagBlurFactor) _blur_factor = desc.BlurFactor; else _blur_factor = UI::CurrentScaleFactor * 25.0;
-				if (need_null_bk && Effect::Init()) ex_style |= WS_EX_NOREDIRECTIONBITMAP; else _effect_flags &= 0x7;
+				if (need_null_bk && Windows::LayeredSubsystemInitialize()) ex_style |= WS_EX_NOREDIRECTIONBITMAP; else _effect_flags &= 0x7;
 				RECT rect = { desc.Position.Left, desc.Position.Top, desc.Position.Right, desc.Position.Bottom };
 				_min_constraints = desc.MinimalConstraints;
 				_max_constraints = desc.MaximalConstraints;
@@ -1222,7 +1210,7 @@ namespace Engine
 				if (_effect_flags) { _effect_flags |= 4; _dwm_reset(); }
 				if (_parent) _parent->_children.Append(this);
 			}
-			virtual ~SystemWindow(void) override { if (_taskbar) _taskbar->Release(); if (_layered) Effect::ReleaseLayers(_layered); }
+			virtual ~SystemWindow(void) override { if (_taskbar) _taskbar->Release(); if (_layered) _layered.SetReference(0); }
 			virtual void Show(bool show) override { ShowWindow(_window, show ? ((GetWindowLongPtr(_window, GWL_EXSTYLE) & WS_EX_NOACTIVATE) ? SW_SHOWNOACTIVATE : SW_SHOW) : SW_HIDE); }
 			virtual bool IsVisible(void) override { return IsWindowVisible(_window) != 0; }
 			virtual void SetText(const string & text) override { SetWindowTextW(_window, text); }
@@ -1337,10 +1325,7 @@ namespace Engine
 					_layer->Detach();
 					_layer.SetReference(0);
 				}
-				if (_layered) {
-					Effect::ReleaseLayers(_layered);
-					_layered = 0;
-				}
+				if (_layered) _layered.SetReference(0);
 				if (engine) {
 					_layer.SetRetain(engine);
 					_layer->Attach(this);
@@ -2550,14 +2535,14 @@ namespace Engine
 			} catch (...) { return 0; }
 		}
 	
-		void _get_window_render_flags(IWindow * window, int * fx_flags, Color * clear_color, MARGINS ** margins)
+		void GetWindowSurfaceFlags(ICoreWindow * window, uint * mode, Color * clear_color, MARGINS ** margins) noexcept
 		{
 			auto wnd = static_cast<SystemWindow *>(window);
-			if (fx_flags) *fx_flags = wnd->_effect_flags;
+			if (mode) *mode = wnd->_effect_flags;
 			if (clear_color) *clear_color = wnd->_clear_color;
 			if (margins) *margins = &wnd->_margins;
 		}
-		void _set_window_render_callback(IWindow * window, func_RenderLayerCallback callback)
+		void SetWindowRenderingCallback(ICoreWindow * window, func_RenderLayerCallback callback) noexcept
 		{
 			auto wnd = static_cast<SystemWindow *>(window);
 			if (callback) {
@@ -2568,17 +2553,15 @@ namespace Engine
 				wnd->_render_callback = 0;
 			}
 		}
-		void _get_window_layers(ICoreWindow * window, HLAYERS * layers, double * factor)
+		void SetWindowUserRenderingCallback(ICoreWindow * window) noexcept { SetWindowRenderingCallback(window, 0); }
+		void SetWindowLayers(ICoreWindow * window, IWindowLayers * layers) noexcept { auto wnd = static_cast<SystemWindow *>(window); wnd->_layered.SetRetain(layers); }
+		void GetWindowLayers(ICoreWindow * window, IWindowLayers ** layers, double * factor) noexcept
 		{
-			*layers = static_cast<SystemWindow *>(window)->_layered;
-			*factor = static_cast<SystemWindow *>(window)->_blur_factor;
-		}
-		void _set_window_layers(ICoreWindow * window, HLAYERS layers)
-		{
-			auto wnd = static_cast<SystemWindow *>(window);
-			if (wnd->_layered) Effect::ReleaseLayers(wnd->_layered);
-			wnd->_layered = layers;
-			if (layers) Effect::RetainLayers(wnd->_layered);
+			if (layers) {
+				*layers = static_cast<SystemWindow *>(window)->_layered;
+				if (*layers) (*layers)->Retain();
+			}
+			if (factor) *factor = static_cast<SystemWindow *>(window)->_blur_factor;
 		}
 	}
 }

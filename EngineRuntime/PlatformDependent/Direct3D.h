@@ -8,36 +8,28 @@ namespace Engine
 {
 	namespace Direct3D
 	{
-		enum class DeviceDriverClass { Hardware, Warp, None };
+		extern SafePointer<Graphics::IDeviceFactory> CommonFactory;
+		extern SafePointer<Graphics::IDevice> CommonDevice;
 
-		extern SafePointer<ID3D11Device> D3DDevice;
-		extern SafePointer<ID2D1Device> D2DDevice;
-		extern SafePointer<IDXGIDevice1> DXGIDevice;
-		extern SafePointer<ID3D11DeviceContext> D3DDeviceContext;
-		extern SafePointer<IDXGIFactory> DXGIFactory;
-		extern SafePointer<Graphics::IDevice> WrappedDevice;
+		bool CreateD2DDeviceContextForWindow(HWND Window, ID2D1DeviceContext ** Context, IDXGISwapChain1 ** SwapChain) noexcept;
+		bool CreateSwapChainForWindow(HWND Window, IDXGISwapChain ** SwapChain) noexcept;
+		bool CreateSwapChainDevice(IDXGISwapChain * SwapChain, ID2D1RenderTarget ** Target) noexcept;
+		bool ResizeRenderBufferForD2DDevice(ID2D1DeviceContext * Context, IDXGISwapChain1 * SwapChain) noexcept;
+		bool ResizeRenderBufferForSwapChainDevice(IDXGISwapChain * SwapChain) noexcept;
 
-		void CreateDevices(void);
-		void ReleaseDevices(void);
-		void RestartDevicesIfNecessary(void);
-		DeviceDriverClass GetDeviceDriverClass(void);
+		void CreateCommonDeviceFactory(void) noexcept;
+		void CreateCommonDevice(void) noexcept;
 
-		bool CreateD2DDeviceContextForWindow(HWND Window, ID2D1DeviceContext ** Context, IDXGISwapChain1 ** SwapChain);
-		bool CreateSwapChainForWindow(HWND Window, IDXGISwapChain ** SwapChain);
-		bool CreateSwapChainDevice(IDXGISwapChain * SwapChain, ID2D1RenderTarget ** Target);
-		bool ResizeRenderBufferForD2DDevice(ID2D1DeviceContext * Context, IDXGISwapChain1 * SwapChain);
-		bool ResizeRenderBufferForSwapChainDevice(IDXGISwapChain * SwapChain);
+		IDXGIFactory * GetInnerObject(Graphics::IDeviceFactory * factory) noexcept;
+		IDXGIFactory1 * GetInnerObject1(Graphics::IDeviceFactory * factory) noexcept;
+		ID3D11Device * GetInnerObject(Graphics::IDevice * device) noexcept;
+		ID2D1Device * GetInnerObject2D(Graphics::IDevice * device) noexcept;
+		ID3D11Resource * GetInnerObject(Graphics::IDeviceResource * resource) noexcept;
+		ID3D11Texture2D * GetInnerObject2D(Graphics::ITexture * texture) noexcept;
 
-		Graphics::IDeviceFactory * CreateDeviceFactoryD3D11(void);
-		ID3D11Resource * QueryInnerObject(Graphics::IDeviceResource * resource);
-		ID3D11Device * CreateDeviceD3D11(IDXGIAdapter * adapter, D3D_DRIVER_TYPE driver);
-		Graphics::IDevice * CreateWrappedDeviceD3D11(ID3D11Device * device);
-		DXGI_FORMAT MakeDxgiFormat(Graphics::PixelFormat format);
-
-		ID3D11Device * GetD3D11Device(Graphics::IDevice * device);
-		ID3D11Texture2D * GetD3D11Texture2D(Graphics::ITexture * texture);
-		IDXGIDevice * QueryDXGIDevice(Graphics::IDevice * device);
-		IUnknown * GetVideoAccelerationDevice(Graphics::IDevice * device);
-		void SetVideoAccelerationDevice(Graphics::IDevice * device_for, IUnknown * device_set);
+		DXGI_FORMAT MakeDxgiFormat(Graphics::PixelFormat format) noexcept;
+		IUnknown * GetVideoAccelerationDevice(Graphics::IDevice * device) noexcept;
+		void SetVideoAccelerationDevice(Graphics::IDevice * device_for, IUnknown * device_set) noexcept;
+		IDXGIDevice * QueryDXGIDevice(Graphics::IDevice * device) noexcept;
 	}
 }
