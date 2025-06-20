@@ -3,7 +3,13 @@
 #include "SystemWindowsAPI.h"
 #include "MetalDevice.h"
 #include "CocoaInterop.h"
+#include "../Interfaces/SystemIPC.h"
+#include "../Interfaces/Process.h"
 #include "../Storage/Archive.h"
+
+#include <atomic>
+#import "objc/runtime.h"
+@import IOSurface;
 
 using namespace Engine;
 using namespace Engine::Graphics;
@@ -65,6 +71,60 @@ using namespace Engine::Graphics;
 		[layer setNeedsDisplay];
 	}
 @end
+@interface ERTXPCHookEx : NSCoder
+	{
+	@public
+		mach_port_t port;
+		bool port_set;
+	}
+	- (instancetype) init;
+	- (void) encodeXPCObject: (xpc_object_t) xpcObject forKey: (NSString *) key;
+	- (xpc_object_t) decodeXPCObjectOfType: (xpc_type_t) type forKey: (NSString *) key;
+	- (NSXPCConnection *) getConnection;
+@end
+@implementation ERTXPCHookEx
+	- (instancetype) init { [super init]; port = 0; port_set = false; return self; }
+	- (BOOL) isKindOfClass: (Class) aClass { return (aClass == [NSXPCCoder class]); }
+	- (void) encodeObject: (id) object forKey: (NSString *) key
+	{
+		if ([object class] == [IOSurface class] && [key compare: @"ioSurface"] == NSOrderedSame) {
+			if (!port_set) {
+				port = IOSurfaceCreateMachPort((IOSurfaceRef) object);
+				port_set = true;
+			}
+		}
+	}
+	- (void) encodeXPCObject: (xpc_object_t) xpcObject forKey: (NSString *) key { @throw [NSException exceptionWithName: @"ERTXPCHookExException" reason: @"Unsupported selector call" userInfo: nil]; }
+	- (xpc_object_t) decodeXPCObjectOfType: (xpc_type_t) type forKey: (NSString *) key { @throw [NSException exceptionWithName: @"ERTXPCHookExException" reason: @"Unsupported selector call" userInfo: nil]; }
+	- (NSXPCConnection *) getConnection { @throw [NSException exceptionWithName: @"ERTXPCHookExException" reason: @"Unsupported selector call" userInfo: nil]; }
+@end
+@interface ERTXPCHookIn : NSCoder
+	{
+	@public
+		mach_port_t port;
+	}
+	- (instancetype) init;
+	- (void) encodeXPCObject: (xpc_object_t) xpcObject forKey: (NSString *) key;
+	- (xpc_object_t) decodeXPCObjectOfType: (xpc_type_t) type forKey: (NSString *) key;
+	- (NSXPCConnection *) getConnection;
+@end
+@implementation ERTXPCHookIn
+	- (instancetype) init { [super init]; port = 0; return self; }
+	- (BOOL) isKindOfClass: (Class) aClass { return (aClass == [NSXPCCoder class]); }
+	- (id) decodeObjectOfClass: (Class) aClass forKey: (NSString *) key
+	{
+		if ([key compare: @"ioSurface"] == NSOrderedSame) {
+			if (aClass == [IOSurface class]) {
+				auto surface = (id) IOSurfaceLookupFromMachPort(port);
+				if (!surface) @throw [NSException exceptionWithName: @"ERTXPCHookInException" reason: @"Invalid IOSurface port number" userInfo: nil];
+				return surface;
+			} else @throw [NSException exceptionWithName: @"ERTXPCHookInException" reason: @"Invalid expected field type" userInfo: nil];
+		} else return nil;
+	}
+	- (void) encodeXPCObject: (xpc_object_t) xpcObject forKey: (NSString *) key { @throw [NSException exceptionWithName: @"ERTXPCHookInException" reason: @"Unsupported selector call" userInfo: nil]; }
+	- (xpc_object_t) decodeXPCObjectOfType: (xpc_type_t) type forKey: (NSString *) key { @throw [NSException exceptionWithName: @"ERTXPCHookInException" reason: @"Unsupported selector call" userInfo: nil]; }
+	- (NSXPCConnection *) getConnection { @throw [NSException exceptionWithName: @"ERTXPCHookInException" reason: @"Unsupported selector call" userInfo: nil]; }
+@end
 
 namespace Engine
 {
@@ -121,8 +181,139 @@ namespace Engine
 		}
 		void MetalPresentationEngine::SetOpaque(bool opaque) { if (_metal_view) [reinterpret_cast<ERTMetalView *>(_metal_view)->layer setOpaque: opaque]; }
 		void MetalPresentationEngine::SetFramebufferOnly(bool framebuffer_only) { if (_metal_view) [reinterpret_cast<ERTMetalView *>(_metal_view)->layer setFramebufferOnly: framebuffer_only]; }
+		void MetalPresentationEngine::SetExtendedDynamicRange(bool edr) { if (_metal_view) [reinterpret_cast<ERTMetalView *>(_metal_view)->layer setWantsExtendedDynamicRangeContent: edr]; }
 		id<CAMetalDrawable> MetalPresentationEngine::GetDrawable(void) { if (_metal_view) return [reinterpret_cast<ERTMetalView *>(_metal_view)->layer nextDrawable]; else return 0; }
 
+		class MTL_DeviceResourceHandle : public IDeviceResourceHandle
+		{
+		public:
+			uint64 _device_id;
+			SafePointer<DataBlock> _metal_handle_data;
+			SafePointer<DataBlock> _mutex_path;
+		public:
+			MTL_DeviceResourceHandle(uint64 device_id, DataBlock * metal_handle, DataBlock * mutex_path) noexcept : _device_id(device_id) { _metal_handle_data.SetRetain(metal_handle); _mutex_path.SetRetain(mutex_path); }
+			MTL_DeviceResourceHandle(const DataBlock * data)
+			{
+				if (!data || data->Length() < 16) throw InvalidFormatException();
+				_device_id = reinterpret_cast<const uint64 *>(data->GetBuffer())[0];
+				auto length1 = reinterpret_cast<const uint32 *>(data->GetBuffer())[2];
+				auto length2 = reinterpret_cast<const uint32 *>(data->GetBuffer())[3];
+				if (length1 > 0x10000 || length2 > 0x10000) throw InvalidFormatException();
+				if (length1 + length2 + 16 != data->Length()) throw InvalidFormatException();
+				_metal_handle_data = new DataBlock(1);
+				_mutex_path = new DataBlock(1);
+				_metal_handle_data->SetLength(length1);
+				_mutex_path->SetLength(length2);
+				MemoryCopy(_metal_handle_data->GetBuffer(), data->GetBuffer() + 16, length1);
+				MemoryCopy(_mutex_path->GetBuffer(), data->GetBuffer() + 16 + length1, length2);
+			}
+			virtual ~MTL_DeviceResourceHandle(void) override {}
+			virtual uint64 GetDeviceIdentifier(void) noexcept override { return _device_id; }
+			virtual DataBlock * Serialize(void) noexcept override
+			{
+				try {
+					auto length1 = _metal_handle_data->Length();
+					auto length2 = _mutex_path->Length();
+					SafePointer<DataBlock> result = new DataBlock(1);
+					result->SetLength(length1 + length2 + 16);
+					reinterpret_cast<uint64 *>(result->GetBuffer())[0] = _device_id;
+					reinterpret_cast<uint32 *>(result->GetBuffer())[2] = length1;
+					reinterpret_cast<uint32 *>(result->GetBuffer())[3] = length2;
+					MemoryCopy(result->GetBuffer() + 16, _metal_handle_data->GetBuffer(), length1);
+					MemoryCopy(result->GetBuffer() + 16 + length1, _mutex_path->GetBuffer(), length2);
+					result->Retain();
+					return result;
+				} catch (...) { return 0; }
+			}
+			virtual string ToString(void) const override { return L"MTL_DeviceResourceHandle"; }
+		};
+		class MTL_SharedInfrastructure : public Object
+		{
+		public:
+			struct SharedTextureInfo
+			{
+				uint type, format, usage, size;
+				uint width, height, depth, __unused0;
+				union { std::atomic_flag lock; uint64 __unused1; };
+			};
+		public:
+			SafePointer<MTL_DeviceResourceHandle> _handle;
+			SafePointer<IPC::ISharedMemory> _meta_memory;
+			NSMachPort * _ns_shared_port;
+			mach_port_t _shared_port;
+			SharedTextureInfo * _meta;
+		public:
+			MTL_SharedInfrastructure(ITexture * texture, MTLSharedTextureHandle * handle, uint64 device_id) : _ns_shared_port(0)
+			{
+				auto pid_name = string(uint32(getpid()), HexadecimalBaseLowerCase, 8);
+				auto addr_name = string(uint64(reinterpret_cast<uintptr>(this)), HexadecimalBaseLowerCase, 16);
+				auto public_port_name = FormatString(L"com.EngineSoftware.shared-texture-%0-%1", pid_name, addr_name);
+				auto public_memory_name = FormatString(L"stex_%0_%1", pid_name, addr_name);
+				@autoreleasepool {
+					auto hook = [[ERTXPCHookEx alloc] init];
+					if (!hook) throw OutOfMemoryException();
+					@try { [handle encodeWithCoder: hook]; } @catch (NSException *exception) {} @finally {}
+					if (!hook->port_set) { [hook release]; throw Exception(); }
+					_shared_port = hook->port;
+					[hook release];
+					auto ns_public_name = Cocoa::CocoaString(public_port_name);
+					if (!ns_public_name) { mach_port_deallocate(mach_task_self(), _shared_port); throw OutOfMemoryException(); }
+					auto register_status = [[NSMachBootstrapServer sharedInstance] registerPort: [NSMachPort portWithMachPort: _shared_port options: NSMachPortDeallocateNone] name: ns_public_name];
+					[ns_public_name release];
+					if (!register_status) { mach_port_deallocate(mach_task_self(), _shared_port); throw OutOfMemoryException(); }
+					try {
+						IPC::DestroySharedMemory(public_memory_name);
+						_meta_memory = IPC::CreateSharedMemory(public_memory_name, sizeof(SharedTextureInfo), IPC::SharedMemoryCreateNew);
+						if (!_meta_memory) throw OutOfMemoryException();
+						if (!_meta_memory->Map(reinterpret_cast<void **>(&_meta), IPC::SharedMemoryMapReadWrite)) throw OutOfMemoryException();
+					} catch (...) {
+						mach_port_deallocate(mach_task_self(), _shared_port);
+						throw Exception();
+					}
+				}
+				try {
+					SafePointer<DataBlock> port_name_ascii = public_port_name.EncodeSequence(Encoding::ANSI, true);
+					SafePointer<DataBlock> memory_name_ascii = public_memory_name.EncodeSequence(Encoding::ANSI, true);
+					_handle = new MTL_DeviceResourceHandle(device_id, port_name_ascii, memory_name_ascii);
+				} catch (...) {
+					_meta_memory->Unmap();
+					mach_port_deallocate(mach_task_self(), _shared_port);
+					throw;
+				}
+				_meta->type = uint(texture->GetTextureType());
+				_meta->format = uint(texture->GetPixelFormat());
+				_meta->usage = texture->GetResourceUsage();
+				_meta->size = texture->GetArraySize();
+				_meta->width = texture->GetWidth();
+				_meta->height = texture->GetHeight();
+				_meta->depth = texture->GetDepth();
+				_meta->__unused0 = 0;
+				_meta->__unused1 = 0;
+				_meta->lock.clear();
+			}
+			MTL_SharedInfrastructure(MTL_DeviceResourceHandle * source)
+			{
+				_handle.SetRetain(source);
+				auto public_port_name = string(source->_metal_handle_data->GetBuffer(), source->_metal_handle_data->Length(), Encoding::ANSI);
+				auto public_memory_name = string(source->_mutex_path->GetBuffer(), source->_mutex_path->Length(), Encoding::ANSI);
+				auto ns_public_name = Cocoa::CocoaString(public_port_name);
+				if (!ns_public_name) throw OutOfMemoryException();
+				_ns_shared_port = [[NSMachBootstrapServer sharedInstance] portForName: ns_public_name];
+				[ns_public_name release];
+				if (!_ns_shared_port) throw Exception();
+				_shared_port = [_ns_shared_port machPort];
+				_meta_memory = IPC::CreateSharedMemory(public_memory_name, sizeof(SharedTextureInfo), IPC::SharedMemoryOpenExisting);
+				if (!_meta_memory) { [_ns_shared_port release]; throw Exception(); }
+				if (!_meta_memory->Map(reinterpret_cast<void **>(&_meta), IPC::SharedMemoryMapReadWrite)) { [_ns_shared_port release]; throw Exception(); }
+			}
+			virtual ~MTL_SharedInfrastructure(void) override
+			{
+				_meta_memory->Unmap();
+				if (_ns_shared_port) [_ns_shared_port release];
+				else mach_port_deallocate(mach_task_self(), _shared_port);
+			}
+			virtual string ToString(void) const override { return L"MTL_SharedInfrastructure"; }
+		};
 		class MTL_Buffer : public IBuffer
 		{
 			IDevice * wrapper;
@@ -144,17 +335,17 @@ namespace Engine
 			IDevice * wrapper;
 		public:
 			id<MTLTexture> texture;
+			SafePointer<MTL_SharedInfrastructure> shared;
 			TextureType type;
 			PixelFormat format;
 			uint32 usage, width, height, depth, size;
 			uint32 rtv_mip, rtv_slice, rtv_depth;
 
-			MTL_Texture(IDevice * _wrapper) : wrapper(_wrapper), texture(0), format(PixelFormat::Invalid),
-				usage(0), width(0), height(0), depth(0), size(0), rtv_mip(0), rtv_slice(0), rtv_depth(0) {}
+			MTL_Texture(IDevice * _wrapper) : wrapper(_wrapper), texture(0), format(PixelFormat::Invalid), usage(0), width(0), height(0), depth(0), size(0), rtv_mip(0), rtv_slice(0), rtv_depth(0) {}
 			virtual ~MTL_Texture(void) override { [texture release]; }
 			virtual IDevice * GetParentDevice(void) noexcept override { return wrapper; }
 			virtual ResourceType GetResourceType(void) noexcept override { return ResourceType::Texture; }
-			virtual ResourceMemoryPool GetMemoryPool(void) noexcept override { return ResourceMemoryPool::Default; }
+			virtual ResourceMemoryPool GetMemoryPool(void) noexcept override { return shared ? ResourceMemoryPool::Shared : ResourceMemoryPool::Default; }
 			virtual uint32 GetResourceUsage(void) noexcept override { return usage; }
 			virtual TextureType GetTextureType(void) noexcept override { return type; }
 			virtual PixelFormat GetPixelFormat(void) noexcept override { return format; }
@@ -164,6 +355,14 @@ namespace Engine
 			virtual uint32 GetMipmapCount(void) noexcept override { return [texture mipmapLevelCount]; }
 			virtual uint32 GetArraySize(void) noexcept override { return size; }
 			virtual string ToString(void) const override { return L"MTL_Texture"; }
+			bool SharedTextureInit(void) noexcept
+			{
+				auto handle = [texture newSharedTextureHandle];
+				if (!handle) return false;
+				try { shared = new MTL_SharedInfrastructure(this, handle, wrapper->GetDeviceIdentifier()); } catch (...) { [handle release]; return false; }
+				[handle release];
+				return true;
+			}
 		};
 		class MTL_SamplerState : public ISamplerState
 		{
@@ -351,17 +550,15 @@ namespace Engine
 				error_state = true;
 				return true;
 			}
-			virtual bool Begin2DRenderingPass(ITexture * rt) noexcept override
+			virtual bool Begin2DRenderingPass(const RenderTargetViewDesc & rtv) noexcept override
 			{
 				if (state) return false;
 				if (!device_2d) {
 					device_2d = Cocoa::CreateMetalRenderingDevice(wrapper);
 					if (!device_2d) return false;
 				}
-				if (!(rt->GetResourceUsage() & ResourceUsageRenderTarget)) return false;
-				if (rt->GetTextureType() != TextureType::Type2D) return false;
-				if (rt->GetPixelFormat() != PixelFormat::B8G8R8A8_unorm) return false;
-				if (rt->GetMipmapCount() != 1) return false;
+				if (!rtv.Texture || !(rtv.Texture->GetResourceUsage() & ResourceUsageRenderTarget)) return false;
+				if (rtv.Texture->GetTextureType() != TextureType::Type2D || rtv.Texture->GetPixelFormat() != PixelFormat::B8G8R8A8_unorm || rtv.Texture->GetMipmapCount() != 1) return false;
 				autorelease_pool = [[NSAutoreleasePool alloc] init];
 				if (!autorelease_pool) return false;
 				if (!current_command) {
@@ -374,7 +571,9 @@ namespace Engine
 					[current_command retain];
 				}
 				try {
-					Cocoa::PureMetalRenderingDeviceBeginDraw(device_2d, current_command, GetInnerMetalTexture(rt), rt->GetWidth(), rt->GetHeight());
+					if (rtv.LoadAction == TextureLoadAction::Load) Cocoa::PureMetalRenderingDeviceBeginDraw(device_2d, current_command, GetInnerMetalTexture(rtv.Texture), rtv.Texture->GetWidth(), rtv.Texture->GetHeight(), MTLLoadActionLoad, 0);
+					else if (rtv.LoadAction == TextureLoadAction::Clear) Cocoa::PureMetalRenderingDeviceBeginDraw(device_2d, current_command, GetInnerMetalTexture(rtv.Texture), rtv.Texture->GetWidth(), rtv.Texture->GetHeight(), MTLLoadActionClear, rtv.ClearValue);
+					else Cocoa::PureMetalRenderingDeviceBeginDraw(device_2d, current_command, GetInnerMetalTexture(rtv.Texture), rtv.Texture->GetWidth(), rtv.Texture->GetHeight(), MTLLoadActionDontCare, 0);
 				} catch (...) {
 					[autorelease_pool release];
 					autorelease_pool = 0;
@@ -697,6 +896,40 @@ namespace Engine
 				current_command = [queue commandBuffer];
 				[current_command retain];
 			}
+			virtual bool AcquireSharedResource(IDeviceResource * rsrc) noexcept override
+			{
+				if (state || !rsrc || rsrc->GetMemoryPool() != ResourceMemoryPool::Shared) return false;
+				auto sync = static_cast<MTL_Texture *>(rsrc)->shared->_meta;
+				while (sync->lock.test_and_set(std::memory_order_acquire)) Sleep(1);
+				return true;
+			}
+			virtual bool AcquireSharedResource(IDeviceResource * rsrc, uint32 timeout) noexcept override
+			{
+				if (state || !rsrc || rsrc->GetMemoryPool() != ResourceMemoryPool::Shared) return false;
+				auto sync = static_cast<MTL_Texture *>(rsrc)->shared->_meta;
+				if (timeout) {
+					auto start = GetTimerValue();
+					while (sync->lock.test_and_set(std::memory_order_acquire)) {
+						if (GetTimerValue() - start < timeout) Sleep(1);
+						else return false;
+					}
+					return true;
+
+				} else return !sync->lock.test_and_set(std::memory_order_acquire);
+			}
+			virtual bool ReleaseSharedResource(IDeviceResource * rsrc) noexcept override
+			{
+				if (state || !rsrc || rsrc->GetMemoryPool() != ResourceMemoryPool::Shared) return false;
+				auto sync = static_cast<MTL_Texture *>(rsrc)->shared->_meta;
+				if (current_command) {
+					[current_command commit];
+					[current_command waitUntilCompleted];
+					[current_command release];
+					current_command = 0;
+				}
+				sync->lock.clear(std::memory_order_release);
+				return true;
+			}
 			virtual string ToString(void) const override { return L"MTL_DeviceContext"; }
 		};
 		class MTL_WindowLayer : public IWindowLayer
@@ -707,10 +940,10 @@ namespace Engine
 			IDevice * wrapper;
 			Windows::ICoreWindow * window;
 			PixelFormat format;
-			uint32 width, height, usage;
+			uint32 width, height, usage, attributes;
 			id<CAMetalDrawable> last_drawable;
 		public:
-			MTL_WindowLayer(IDevice * _wrapper, MTL_DeviceContext * _context, const WindowLayerDesc & desc, Windows::ICoreWindow * _window) : wrapper(_wrapper), last_drawable(0)
+			MTL_WindowLayer(IDevice * _wrapper, MTL_DeviceContext * _context, const WindowLayerDesc & desc, Windows::ICoreWindow * _window) : wrapper(_wrapper), last_drawable(0), attributes(0)
 			{
 				if (desc.Format != PixelFormat::Invalid) {
 					if (desc.Format == PixelFormat::B8G8R8A8_unorm) format = desc.Format;
@@ -718,6 +951,7 @@ namespace Engine
 					else if (desc.Format == PixelFormat::R10G10B10A2_unorm) format = desc.Format;
 					else throw InvalidArgumentException();
 				} else format = PixelFormat::B8G8R8A8_unorm;
+				if (desc.Usage & ~(ResourceUsageShaderRead | ResourceUsageRenderTarget | WindowLayerAttributeMask)) throw InvalidArgumentException();
 				if (!(desc.Usage & ResourceUsageRenderTarget)) throw InvalidArgumentException();
 				window = _window;
 				context.SetRetain(_context);
@@ -726,7 +960,27 @@ namespace Engine
 				engine->SetDevice(GetInnerMetalDevice(wrapper));
 				if (desc.Usage & ResourceUsageShaderRead) engine->SetFramebufferOnly(false);
 				else engine->SetFramebufferOnly(true);
-				engine->SetOpaque(!Cocoa::WindowNeedsAlphaBackbuffer(_window));
+				if (desc.Usage & WindowLayerAttributeAlphaChannelIgnore) {
+					engine->SetOpaque(true);
+					attributes |= WindowLayerAttributeAlphaChannelIgnore;
+				} else if (desc.Usage & WindowLayerAttributeAlphaChannelPremultiplied) {
+					engine->SetOpaque(false);
+					attributes |= WindowLayerAttributeAlphaChannelPremultiplied;
+				} else if (desc.Usage & WindowLayerAttributeAlphaChannelStraight) {
+					throw InvalidArgumentException();
+				} else {
+					if (Cocoa::WindowNeedsAlphaBackbuffer(_window)) {
+						engine->SetOpaque(false);
+						attributes |= WindowLayerAttributeAlphaChannelPremultiplied;
+					} else {
+						engine->SetOpaque(true);
+						attributes |= WindowLayerAttributeAlphaChannelIgnore;
+					}
+				}
+				if (desc.Usage & WindowLayerAttributeExtendedDynamicRange && (desc.Format == PixelFormat::R16G16B16A16_float)) {
+					engine->SetExtendedDynamicRange(true);
+					attributes |= WindowLayerAttributeExtendedDynamicRange;
+				}
 				engine->SetSize(Point(max(desc.Width, 1U), max(desc.Height, 1U)));
 				engine->SetPixelFormat(MakeMetalPixelFormat(format));
 				width = max(desc.Width, 1U);
@@ -796,6 +1050,7 @@ namespace Engine
 			virtual bool SwitchToFullscreen(void) noexcept override { return Cocoa::SetWindowFullscreenMode(window, true); }
 			virtual bool SwitchToWindow(void) noexcept override { return Cocoa::SetWindowFullscreenMode(window, false); }
 			virtual bool IsFullscreen(void) noexcept override { return Cocoa::IsWindowInFullscreenMode(window); }
+			virtual uint GetLayerAttributes(void) noexcept override { return attributes; }
 			virtual string ToString(void) const override { return L"MTL_WindowLayer"; }
 		};
 		class MTL_Device : public IDevice
@@ -899,25 +1154,35 @@ namespace Engine
 			virtual string GetDeviceName(void) noexcept override { return Cocoa::EngineString([device name]); }
 			virtual uint64 GetDeviceIdentifier(void) noexcept override { return [device registryID]; }
 			virtual bool DeviceIsValid(void) noexcept override { return is_valid; }
-			virtual void GetImplementationInfo(string & tech, uint32 & version) noexcept override
+			virtual void GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) noexcept override { try { tech = L"Metal"; } catch (...) {} QueryMetalVersion(device, version_major, version_minor); }
+			virtual DeviceClass GetDeviceClass(void) noexcept override { if ([device hasUnifiedMemory]) return DeviceClass::Integrated; else return DeviceClass::Discrete; }
+			virtual uint64 GetDeviceMemory(void) noexcept override { return [device recommendedMaxWorkingSetSize]; }
+			virtual bool GetDevicePixelFormatSupport(PixelFormat format, PixelFormatUsage usage) noexcept override
 			{
-				tech = L"Metal";
-				if ([device supportsFamily: MTLGPUFamilyMac2]) version = 2;
-				else if ([device supportsFamily: MTLGPUFamilyMac1]) version = 1;
-				else version = 0;
+				if (usage == Graphics::PixelFormatUsage::ShaderRead) return QueryMetalFormatSupportForShaderRead(device, format);
+				else if (usage == Graphics::PixelFormatUsage::ShaderSample) return QueryMetalFormatSupportForShaderSample(device, format);
+				else if (usage == Graphics::PixelFormatUsage::RenderTarget) return QueryMetalFormatSupportForRenderTarget(device, format);
+				else if (usage == Graphics::PixelFormatUsage::BlendRenderTarget) return QueryMetalFormatSupportForBlendRenderTarget(device, format);
+				else if (usage == Graphics::PixelFormatUsage::DepthStencil) return QueryMetalFormatSupportForDepthStencil(device, format);
+				else if (usage == Graphics::PixelFormatUsage::WindowSurface) return format == Graphics::PixelFormat::B8G8R8A8_unorm || format == Graphics::PixelFormat::R10G10B10A2_unorm || format == Graphics::PixelFormat::R16G16B16A16_float;
+				else if (usage == Graphics::PixelFormatUsage::RenderTarget2D || usage == Graphics::PixelFormatUsage::VideoIO) return format == Graphics::PixelFormat::B8G8R8A8_unorm;
+				else if (usage == Graphics::PixelFormatUsage::BitmapSource) return QueryMetalFormatSupportForShaderRead(device, format) && QueryMetalFormatSupportForShaderSample(device, format) && Graphics::IsColorFormat(format);
+				else return false;
 			}
 			virtual IShaderLibrary * LoadShaderLibrary(const void * data, int length) noexcept override
 			{
-				SafePointer<MTL_ShaderLibrary> lib = new (std::nothrow) MTL_ShaderLibrary(this);
-				if (!lib) return 0;
-				NSError * error;
-				dispatch_data_t data_handle = dispatch_data_create(data, length, dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-				if (!data_handle) return 0;
-				lib->ref = [device newLibraryWithData: data_handle error: &error];
-				[data_handle release];
-				if (error) { [error release]; return 0; }
-				lib->Retain();
-				return lib;
+				@autoreleasepool {
+					SafePointer<MTL_ShaderLibrary> lib = new (std::nothrow) MTL_ShaderLibrary(this);
+					if (!lib) return 0;
+					NSError * error;
+					dispatch_data_t data_handle = dispatch_data_create(data, length, dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+					if (!data_handle) return 0;
+					lib->ref = [device newLibraryWithData: data_handle error: &error];
+					[data_handle release];
+					if (!lib->ref) return 0;
+					lib->Retain();
+					return lib;
+				}
 			}
 			virtual IShaderLibrary * LoadShaderLibrary(const DataBlock * data) noexcept override
 			{
@@ -933,47 +1198,48 @@ namespace Engine
 			}
 			virtual IShaderLibrary * CompileShaderLibrary(const void * data, int length, ShaderError * error) noexcept override
 			{
-				try {
-					SafePointer<Streaming::Stream> stream = new Streaming::MemoryStream(data, length);
-					SafePointer<Storage::Archive> archive = Storage::OpenArchive(stream);
-					if (!archive) throw InvalidFormatException();
-					for (Storage::ArchiveFile file = 1; file <= archive->GetFileCount(); file++) {
-						auto flags = archive->GetFileCustomData(file);
-						if ((flags & 0xFFFF0000) == 0x20000) {
-							SafePointer<MTL_ShaderLibrary> result = new (std::nothrow) MTL_ShaderLibrary(this);
-							if (!result) throw OutOfMemoryException();
-							SafePointer<Streaming::Stream> data_stream = archive->QueryFileStream(file, Storage::ArchiveStream::Native);
-							if (!data_stream) throw InvalidFormatException();
-							SafePointer<DataBlock> code = data_stream->ReadAll();
-							auto code_ns = Cocoa::CocoaString(string(code->GetBuffer(), code->Length(), Encoding::ANSI));
-							auto options = [[MTLCompileOptions alloc] init];
-							if (!code_ns || !options) {
+				@autoreleasepool {
+					try {
+						SafePointer<Streaming::Stream> stream = new Streaming::MemoryStream(data, length);
+						SafePointer<Storage::Archive> archive = Storage::OpenArchive(stream);
+						if (!archive) throw InvalidFormatException();
+						for (Storage::ArchiveFile file = 1; file <= archive->GetFileCount(); file++) {
+							auto flags = archive->GetFileCustomData(file);
+							if ((flags & 0xFFFF0000) == 0x20000) {
+								SafePointer<MTL_ShaderLibrary> result = new (std::nothrow) MTL_ShaderLibrary(this);
+								if (!result) throw OutOfMemoryException();
+								SafePointer<Streaming::Stream> data_stream = archive->QueryFileStream(file, Storage::ArchiveStream::Native);
+								if (!data_stream) throw InvalidFormatException();
+								SafePointer<DataBlock> code = data_stream->ReadAll();
+								auto code_ns = Cocoa::CocoaString(string(code->GetBuffer(), code->Length(), Encoding::ANSI));
+								auto options = [[MTLCompileOptions alloc] init];
+								if (!code_ns || !options) {
+									[code_ns release];
+									[options release];
+									throw OutOfMemoryException();
+								}
+								NSError * error_ns;
+								auto library = [device newLibraryWithSource: code_ns options: options error: &error_ns];
 								[code_ns release];
 								[options release];
-								throw OutOfMemoryException();
+								if (!library) {
+									if (error) *error = ShaderError::Compilation;
+									return 0;
+								}
+								if (error) *error = ShaderError::Success;
+								result->ref = library;
+								result->Retain();
+								return result;
 							}
-							NSError * error_ns;
-							auto library = [device newLibraryWithSource: code_ns options: options error: &error_ns];
-							if (error_ns) [error_ns release];
-							[code_ns release];
-							[options release];
-							if (!library) {
-								if (error) *error = ShaderError::Compilation;
-								return 0;
-							}
-							if (error) *error = ShaderError::Success;
-							result->ref = library;
-							result->Retain();
-							return result;
 						}
+						if (error) *error = ShaderError::NoPlatformVersion;
+					} catch (InvalidFormatException &) {
+						if (error) *error = ShaderError::InvalidContainerData;
+					} catch (...) {
+						if (error) *error = ShaderError::IO;
 					}
-					if (error) *error = ShaderError::NoPlatformVersion;
-				} catch (InvalidFormatException &) {
-					if (error) *error = ShaderError::InvalidContainerData;
-				} catch (...) {
-					if (error) *error = ShaderError::IO;
+					return 0;
 				}
-				return 0;
 			}
 			virtual IShaderLibrary * CompileShaderLibrary(const DataBlock * data, ShaderError * error) noexcept override { return CompileShaderLibrary(data->GetBuffer(), data->Length(), error); }
 			virtual IShaderLibrary * CompileShaderLibrary(Streaming::Stream * stream, ShaderError * error) noexcept override
@@ -987,114 +1253,116 @@ namespace Engine
 			virtual IDeviceContext * GetDeviceContext(void) noexcept override { return context; }
 			virtual IPipelineState * CreateRenderingPipelineState(const PipelineStateDesc & desc) noexcept override
 			{
-				if (!desc.VertexShader || desc.VertexShader->GetType() != ShaderType::Vertex) return 0;
-				if (!desc.PixelShader || desc.PixelShader->GetType() != ShaderType::Pixel) return 0;
-				SafePointer<MTL_PipelineState> result = new (std::nothrow) MTL_PipelineState(this);
-				if (!result) return 0;
-				MTLRenderPipelineDescriptor * descriptor = [[MTLRenderPipelineDescriptor alloc] init];
-				descriptor.vertexFunction = static_cast<MTL_Shader *>(desc.VertexShader)->func;
-				descriptor.fragmentFunction = static_cast<MTL_Shader *>(desc.PixelShader)->func;
-				try {
-					if (!desc.RenderTargetCount || desc.RenderTargetCount > 8) throw Exception();
-					for (uint i = 0; i < desc.RenderTargetCount; i++) {
-						auto & rtd = desc.RenderTarget[i];
-						if (!IsColorFormat(rtd.Format)) throw Exception();
-						MTLRenderPipelineColorAttachmentDescriptor * cad = [[MTLRenderPipelineColorAttachmentDescriptor alloc] init];
-						cad.pixelFormat = MakeMetalPixelFormat(rtd.Format);
-						MTLColorWriteMask wrmask = 0;
-						if (!(rtd.Flags & RenderTargetFlagRestrictWriteRed)) wrmask |= MTLColorWriteMaskRed;
-						if (!(rtd.Flags & RenderTargetFlagRestrictWriteGreen)) wrmask |= MTLColorWriteMaskGreen;
-						if (!(rtd.Flags & RenderTargetFlagRestrictWriteBlue)) wrmask |= MTLColorWriteMaskBlue;
-						if (!(rtd.Flags & RenderTargetFlagRestrictWriteAlpha)) wrmask |= MTLColorWriteMaskAlpha;
-						cad.writeMask = wrmask;
-						if (rtd.Flags & RenderTargetFlagBlendingEnabled) cad.blendingEnabled = YES;
-						else cad.blendingEnabled = NO;
-						cad.alphaBlendOperation = _make_blend_op(rtd.BlendAlpha);
-						cad.rgbBlendOperation = _make_blend_op(rtd.BlendRGB);
-						cad.destinationAlphaBlendFactor = _make_blend_fact(rtd.BaseFactorAlpha);
-						cad.destinationRGBBlendFactor = _make_blend_fact(rtd.BaseFactorRGB);
-						cad.sourceAlphaBlendFactor = _make_blend_fact(rtd.OverFactorAlpha);
-						cad.sourceRGBBlendFactor = _make_blend_fact(rtd.OverFactorRGB);
-						[descriptor.colorAttachments setObject: cad atIndexedSubscript: i];
-						[cad release];
-					}
-					if (desc.DepthStencil.Flags) {
-						if (!IsDepthStencilFormat(desc.DepthStencil.Format)) throw Exception();
-						descriptor.depthAttachmentPixelFormat = MakeMetalPixelFormat(desc.DepthStencil.Format);
-						if (desc.DepthStencil.Format == PixelFormat::D24S8_unorm || desc.DepthStencil.Format == PixelFormat::D32S8_float) {
-							descriptor.stencilAttachmentPixelFormat = MakeMetalPixelFormat(desc.DepthStencil.Format);
+				@autoreleasepool {
+					if (!desc.VertexShader || desc.VertexShader->GetType() != ShaderType::Vertex) return 0;
+					if (!desc.PixelShader || desc.PixelShader->GetType() != ShaderType::Pixel) return 0;
+					SafePointer<MTL_PipelineState> result = new (std::nothrow) MTL_PipelineState(this);
+					if (!result) return 0;
+					MTLRenderPipelineDescriptor * descriptor = [[MTLRenderPipelineDescriptor alloc] init];
+					descriptor.vertexFunction = static_cast<MTL_Shader *>(desc.VertexShader)->func;
+					descriptor.fragmentFunction = static_cast<MTL_Shader *>(desc.PixelShader)->func;
+					try {
+						if (!desc.RenderTargetCount || desc.RenderTargetCount > 8) throw Exception();
+						for (uint i = 0; i < desc.RenderTargetCount; i++) {
+							auto & rtd = desc.RenderTarget[i];
+							if (!IsColorFormat(rtd.Format)) throw Exception();
+							MTLRenderPipelineColorAttachmentDescriptor * cad = [[MTLRenderPipelineColorAttachmentDescriptor alloc] init];
+							cad.pixelFormat = MakeMetalPixelFormat(rtd.Format);
+							MTLColorWriteMask wrmask = 0;
+							if (!(rtd.Flags & RenderTargetFlagRestrictWriteRed)) wrmask |= MTLColorWriteMaskRed;
+							if (!(rtd.Flags & RenderTargetFlagRestrictWriteGreen)) wrmask |= MTLColorWriteMaskGreen;
+							if (!(rtd.Flags & RenderTargetFlagRestrictWriteBlue)) wrmask |= MTLColorWriteMaskBlue;
+							if (!(rtd.Flags & RenderTargetFlagRestrictWriteAlpha)) wrmask |= MTLColorWriteMaskAlpha;
+							cad.writeMask = wrmask;
+							if (rtd.Flags & RenderTargetFlagBlendingEnabled) cad.blendingEnabled = YES;
+							else cad.blendingEnabled = NO;
+							cad.alphaBlendOperation = _make_blend_op(rtd.BlendAlpha);
+							cad.rgbBlendOperation = _make_blend_op(rtd.BlendRGB);
+							cad.destinationAlphaBlendFactor = _make_blend_fact(rtd.BaseFactorAlpha);
+							cad.destinationRGBBlendFactor = _make_blend_fact(rtd.BaseFactorRGB);
+							cad.sourceAlphaBlendFactor = _make_blend_fact(rtd.OverFactorAlpha);
+							cad.sourceRGBBlendFactor = _make_blend_fact(rtd.OverFactorRGB);
+							[descriptor.colorAttachments setObject: cad atIndexedSubscript: i];
+							[cad release];
 						}
+						if (desc.DepthStencil.Flags) {
+							if (!IsDepthStencilFormat(desc.DepthStencil.Format)) throw Exception();
+							descriptor.depthAttachmentPixelFormat = MakeMetalPixelFormat(desc.DepthStencil.Format);
+							if (desc.DepthStencil.Format == PixelFormat::D24S8_unorm || desc.DepthStencil.Format == PixelFormat::D32S8_float) {
+								descriptor.stencilAttachmentPixelFormat = MakeMetalPixelFormat(desc.DepthStencil.Format);
+							}
+						}
+						descriptor.rasterizationEnabled = YES;
+					} catch (...) { [descriptor release]; return 0; }
+					NSError * error;
+					result->state = [device newRenderPipelineStateWithDescriptor: descriptor error: &error];
+					[descriptor release];
+					if (!result->state) return 0;
+					if ((desc.DepthStencil.Flags & DepthStencilFlagDepthTestEnabled) || (desc.DepthStencil.Flags & DepthStencilFlagStencilTestEnabled)) {
+						MTLDepthStencilDescriptor * ds_descriptor = [[MTLDepthStencilDescriptor alloc] init];
+						auto & ds_desc = desc.DepthStencil;
+						if (desc.DepthStencil.Flags & DepthStencilFlagDepthTestEnabled) {
+							ds_descriptor.depthCompareFunction = _make_comp_func(ds_desc.DepthTestFunction);
+							if (desc.DepthStencil.Flags & DepthStencilFlagDepthWriteEnabled) ds_descriptor.depthWriteEnabled = YES;
+							else ds_descriptor.depthWriteEnabled = NO;
+						} else {
+							ds_descriptor.depthCompareFunction = MTLCompareFunctionAlways;
+							ds_descriptor.depthWriteEnabled = NO;
+						}
+						if (desc.DepthStencil.Flags & DepthStencilFlagStencilTestEnabled) {
+							ds_descriptor.frontFaceStencil.readMask = ds_desc.StencilReadMask;
+							ds_descriptor.backFaceStencil.readMask = ds_desc.StencilReadMask;
+							ds_descriptor.frontFaceStencil.writeMask = ds_desc.StencilWriteMask;
+							ds_descriptor.backFaceStencil.writeMask = ds_desc.StencilWriteMask;
+							ds_descriptor.frontFaceStencil.stencilFailureOperation = _make_stencil_func(ds_desc.FrontStencil.OnStencilTestFailed);
+							ds_descriptor.frontFaceStencil.depthFailureOperation = _make_stencil_func(ds_desc.FrontStencil.OnDepthTestFailed);
+							ds_descriptor.frontFaceStencil.depthStencilPassOperation = _make_stencil_func(ds_desc.FrontStencil.OnTestsPassed);
+							ds_descriptor.frontFaceStencil.stencilCompareFunction = _make_comp_func(ds_desc.FrontStencil.TestFunction);
+							ds_descriptor.backFaceStencil.stencilFailureOperation = _make_stencil_func(ds_desc.BackStencil.OnStencilTestFailed);
+							ds_descriptor.backFaceStencil.depthFailureOperation = _make_stencil_func(ds_desc.BackStencil.OnDepthTestFailed);
+							ds_descriptor.backFaceStencil.depthStencilPassOperation = _make_stencil_func(ds_desc.BackStencil.OnTestsPassed);
+							ds_descriptor.backFaceStencil.stencilCompareFunction = _make_comp_func(ds_desc.BackStencil.TestFunction);
+						} else {
+							ds_descriptor.frontFaceStencil.stencilFailureOperation = MTLStencilOperationKeep;
+							ds_descriptor.frontFaceStencil.depthFailureOperation = MTLStencilOperationKeep;
+							ds_descriptor.frontFaceStencil.depthStencilPassOperation = MTLStencilOperationKeep;
+							ds_descriptor.frontFaceStencil.stencilCompareFunction = MTLCompareFunctionAlways;
+							ds_descriptor.frontFaceStencil.readMask = 0;
+							ds_descriptor.frontFaceStencil.writeMask = 0;
+							ds_descriptor.backFaceStencil.stencilFailureOperation = MTLStencilOperationKeep;
+							ds_descriptor.backFaceStencil.depthFailureOperation = MTLStencilOperationKeep;
+							ds_descriptor.backFaceStencil.depthStencilPassOperation = MTLStencilOperationKeep;
+							ds_descriptor.backFaceStencil.stencilCompareFunction = MTLCompareFunctionAlways;
+							ds_descriptor.backFaceStencil.readMask = 0;
+							ds_descriptor.backFaceStencil.writeMask = 0;
+						}
+						result->ds_state = [device newDepthStencilStateWithDescriptor: ds_descriptor];
+						[ds_descriptor release];
+						if (!result->ds_state) return 0;
 					}
-					descriptor.rasterizationEnabled = YES;
-				} catch (...) { [descriptor release]; return 0; }
-				NSError * error;
-				result->state = [device newRenderPipelineStateWithDescriptor: descriptor error: &error];
-				[descriptor release];
-				if (error) { [error release]; return 0; }
-				if ((desc.DepthStencil.Flags & DepthStencilFlagDepthTestEnabled) || (desc.DepthStencil.Flags & DepthStencilFlagStencilTestEnabled)) {
-					MTLDepthStencilDescriptor * ds_descriptor = [[MTLDepthStencilDescriptor alloc] init];
-					auto & ds_desc = desc.DepthStencil;
-					if (desc.DepthStencil.Flags & DepthStencilFlagDepthTestEnabled) {
-						ds_descriptor.depthCompareFunction = _make_comp_func(ds_desc.DepthTestFunction);
-						if (desc.DepthStencil.Flags & DepthStencilFlagDepthWriteEnabled) ds_descriptor.depthWriteEnabled = YES;
-						else ds_descriptor.depthWriteEnabled = NO;
-					} else {
-						ds_descriptor.depthCompareFunction = MTLCompareFunctionAlways;
-						ds_descriptor.depthWriteEnabled = NO;
-					}
-					if (desc.DepthStencil.Flags & DepthStencilFlagStencilTestEnabled) {
-						ds_descriptor.frontFaceStencil.readMask = ds_desc.StencilReadMask;
-						ds_descriptor.backFaceStencil.readMask = ds_desc.StencilReadMask;
-						ds_descriptor.frontFaceStencil.writeMask = ds_desc.StencilWriteMask;
-						ds_descriptor.backFaceStencil.writeMask = ds_desc.StencilWriteMask;
-						ds_descriptor.frontFaceStencil.stencilFailureOperation = _make_stencil_func(ds_desc.FrontStencil.OnStencilTestFailed);
-						ds_descriptor.frontFaceStencil.depthFailureOperation = _make_stencil_func(ds_desc.FrontStencil.OnDepthTestFailed);
-						ds_descriptor.frontFaceStencil.depthStencilPassOperation = _make_stencil_func(ds_desc.FrontStencil.OnTestsPassed);
-						ds_descriptor.frontFaceStencil.stencilCompareFunction = _make_comp_func(ds_desc.FrontStencil.TestFunction);
-						ds_descriptor.backFaceStencil.stencilFailureOperation = _make_stencil_func(ds_desc.BackStencil.OnStencilTestFailed);
-						ds_descriptor.backFaceStencil.depthFailureOperation = _make_stencil_func(ds_desc.BackStencil.OnDepthTestFailed);
-						ds_descriptor.backFaceStencil.depthStencilPassOperation = _make_stencil_func(ds_desc.BackStencil.OnTestsPassed);
-						ds_descriptor.backFaceStencil.stencilCompareFunction = _make_comp_func(ds_desc.BackStencil.TestFunction);
-					} else {
-						ds_descriptor.frontFaceStencil.stencilFailureOperation = MTLStencilOperationKeep;
-						ds_descriptor.frontFaceStencil.depthFailureOperation = MTLStencilOperationKeep;
-						ds_descriptor.frontFaceStencil.depthStencilPassOperation = MTLStencilOperationKeep;
-						ds_descriptor.frontFaceStencil.stencilCompareFunction = MTLCompareFunctionAlways;
-						ds_descriptor.frontFaceStencil.readMask = 0;
-						ds_descriptor.frontFaceStencil.writeMask = 0;
-						ds_descriptor.backFaceStencil.stencilFailureOperation = MTLStencilOperationKeep;
-						ds_descriptor.backFaceStencil.depthFailureOperation = MTLStencilOperationKeep;
-						ds_descriptor.backFaceStencil.depthStencilPassOperation = MTLStencilOperationKeep;
-						ds_descriptor.backFaceStencil.stencilCompareFunction = MTLCompareFunctionAlways;
-						ds_descriptor.backFaceStencil.readMask = 0;
-						ds_descriptor.backFaceStencil.writeMask = 0;
-					}
-					result->ds_state = [device newDepthStencilStateWithDescriptor: ds_descriptor];
-					[ds_descriptor release];
-					if (!result->ds_state) return 0;
+					result->depth_bias = desc.Rasterization.DepthBias;
+					result->depth_bias_clamp = desc.Rasterization.DepthBiasClamp;
+					result->slope_scaled_depth_bias = desc.Rasterization.SlopeScaledDepthBias;
+					if (desc.Rasterization.DepthClipEnable) result->depth_clip = MTLDepthClipModeClip;
+					else result->depth_clip = MTLDepthClipModeClamp;
+					if (desc.Rasterization.Fill == FillMode::Solid) result->fill_mode = MTLTriangleFillModeFill;
+					else if (desc.Rasterization.Fill == FillMode::Wireframe) result->fill_mode = MTLTriangleFillModeLines;
+					else result->fill_mode = MTLTriangleFillModeFill;
+					if (desc.Rasterization.Cull == CullMode::None) result->cull_mode = MTLCullModeNone;
+					else if (desc.Rasterization.Cull == CullMode::Front) result->cull_mode = MTLCullModeFront;
+					else if (desc.Rasterization.Cull == CullMode::Back) result->cull_mode = MTLCullModeBack;
+					else result->cull_mode = MTLCullModeNone;
+					if (desc.Rasterization.FrontIsCounterClockwise) result->front_winding = MTLWindingCounterClockwise;
+					else result->front_winding = MTLWindingClockwise;
+					if (desc.Topology == PrimitiveTopology::PointList) result->primitive_type = MTLPrimitiveTypePoint;
+					else if (desc.Topology == PrimitiveTopology::LineList) result->primitive_type = MTLPrimitiveTypeLine;
+					else if (desc.Topology == PrimitiveTopology::LineStrip) result->primitive_type = MTLPrimitiveTypeLineStrip;
+					else if (desc.Topology == PrimitiveTopology::TriangleList) result->primitive_type = MTLPrimitiveTypeTriangle;
+					else if (desc.Topology == PrimitiveTopology::TriangleStrip) result->primitive_type = MTLPrimitiveTypeTriangleStrip;
+					else result->primitive_type = MTLPrimitiveTypeTriangle;
+					result->Retain();
+					return result;
 				}
-				result->depth_bias = desc.Rasterization.DepthBias;
-				result->depth_bias_clamp = desc.Rasterization.DepthBiasClamp;
-				result->slope_scaled_depth_bias = desc.Rasterization.SlopeScaledDepthBias;
-				if (desc.Rasterization.DepthClipEnable) result->depth_clip = MTLDepthClipModeClip;
-				else result->depth_clip = MTLDepthClipModeClamp;
-				if (desc.Rasterization.Fill == FillMode::Solid) result->fill_mode = MTLTriangleFillModeFill;
-				else if (desc.Rasterization.Fill == FillMode::Wireframe) result->fill_mode = MTLTriangleFillModeLines;
-				else result->fill_mode = MTLTriangleFillModeFill;
-				if (desc.Rasterization.Cull == CullMode::None) result->cull_mode = MTLCullModeNone;
-				else if (desc.Rasterization.Cull == CullMode::Front) result->cull_mode = MTLCullModeFront;
-				else if (desc.Rasterization.Cull == CullMode::Back) result->cull_mode = MTLCullModeBack;
-				else result->cull_mode = MTLCullModeNone;
-				if (desc.Rasterization.FrontIsCounterClockwise) result->front_winding = MTLWindingCounterClockwise;
-				else result->front_winding = MTLWindingClockwise;
-				if (desc.Topology == PrimitiveTopology::PointList) result->primitive_type = MTLPrimitiveTypePoint;
-				else if (desc.Topology == PrimitiveTopology::LineList) result->primitive_type = MTLPrimitiveTypeLine;
-				else if (desc.Topology == PrimitiveTopology::LineStrip) result->primitive_type = MTLPrimitiveTypeLineStrip;
-				else if (desc.Topology == PrimitiveTopology::TriangleList) result->primitive_type = MTLPrimitiveTypeTriangle;
-				else if (desc.Topology == PrimitiveTopology::TriangleStrip) result->primitive_type = MTLPrimitiveTypeTriangleStrip;
-				else result->primitive_type = MTLPrimitiveTypeTriangle;
-				result->Retain();
-				return result;
 			}
 			virtual ISamplerState * CreateSamplerState(const SamplerDesc & desc) noexcept override
 			{
@@ -1126,7 +1394,7 @@ namespace Engine
 			{
 				if (desc.Usage & ~ResourceUsageBufferMask) return 0;
 				if (!desc.Length) return 0;
-				if (desc.MemoryPool == ResourceMemoryPool::Immutable) return 0;
+				if (desc.MemoryPool == ResourceMemoryPool::Immutable || desc.MemoryPool == ResourceMemoryPool::Shared) return 0;
 				SafePointer<MTL_Buffer> buffer = new (std::nothrow) MTL_Buffer(this);
 				if (!buffer) return 0;
 				if ((desc.Usage & ResourceUsageShaderAll) || (desc.Usage & ResourceUsageConstantBuffer) || (desc.Usage & ResourceUsageIndexBuffer)) {
@@ -1149,7 +1417,7 @@ namespace Engine
 			virtual IBuffer * CreateBuffer(const BufferDesc & desc, const ResourceInitDesc & init) noexcept override
 			{
 				if (desc.Usage & ~ResourceUsageBufferMask) return 0;
-				if (!desc.Length) return 0;
+				if (!desc.Length || desc.MemoryPool == ResourceMemoryPool::Shared) return 0;
 				if (desc.MemoryPool == ResourceMemoryPool::Immutable) {
 					if (desc.Usage & ResourceUsageShaderWrite) return 0;
 					if (desc.Usage & ResourceUsageCPUAll) return 0;
@@ -1177,6 +1445,9 @@ namespace Engine
 				}
 				if (desc.Usage & ResourceUsageDepthStencil) {
 					if (!Graphics::IsDepthStencilFormat(desc.Format)) return 0;
+				}
+				if (desc.MemoryPool == ResourceMemoryPool::Shared) {
+					if (desc.Usage & (ResourceUsageCPUAll | ResourceUsageVideoAll)) return 0;
 				}
 				SafePointer<MTL_Texture> texture = new (std::nothrow) MTL_Texture(this);
 				if (!texture) return 0;
@@ -1234,8 +1505,10 @@ namespace Engine
 					uint32 mx_size = max(max(texture->width, texture->height), texture->depth);
 					while (mx_size) { mips++; mx_size /= 2; }
 				}
+				auto metal_format = MakeMetalPixelFormat(desc.Format);
+				if (metal_format == MTLPixelFormatInvalid) { [descriptor release]; return 0; }
 				descriptor.mipmapLevelCount = mips;
-				descriptor.pixelFormat = MakeMetalPixelFormat(desc.Format);
+				descriptor.pixelFormat = metal_format;
 				descriptor.usage = 0;
 				if (desc.Usage & ResourceUsageShaderRead) {
 					descriptor.usage |= MTLTextureUsageShaderRead;
@@ -1253,16 +1526,18 @@ namespace Engine
 				if (desc.Usage & (ResourceUsageCPUAll | ResourceUsageVideoAll)) texture->usage |= ResourceUsageCPUAll | ResourceUsageVideoAll;
 				if (texture->usage & (ResourceUsageCPUAll | ResourceUsageVideoAll)) descriptor.storageMode = MTLStorageModeManaged;
 				else descriptor.storageMode = MTLStorageModePrivate;
-				texture->texture = [device newTextureWithDescriptor: descriptor];
+				if (desc.MemoryPool == ResourceMemoryPool::Shared) texture->texture = [device newSharedTextureWithDescriptor: descriptor];
+				else texture->texture = [device newTextureWithDescriptor: descriptor];
 				[descriptor release];
 				if (!texture->texture) return 0;
+				if (desc.MemoryPool == ResourceMemoryPool::Shared && !texture->SharedTextureInit()) return 0;
 				texture->Retain();
 				return texture;
 			}
 			virtual ITexture * CreateTexture(const TextureDesc & desc, const ResourceInitDesc * init) noexcept override
 			{
 				if (!init) return 0;
-				if (desc.Usage & ~ResourceUsageTextureMask) return 0;
+				if (desc.Usage & ~ResourceUsageTextureMask || desc.MemoryPool == ResourceMemoryPool::Shared) return 0;
 				if (desc.MemoryPool == ResourceMemoryPool::Immutable) {
 					if (desc.Usage & ResourceUsageShaderWrite) return 0;
 					if (desc.Usage & ResourceUsageCPUAll) return 0;
@@ -1332,8 +1607,10 @@ namespace Engine
 					uint32 mx_size = max(max(texture->width, texture->height), texture->depth);
 					while (mx_size) { mips++; mx_size /= 2; }
 				}
+				auto metal_format = MakeMetalPixelFormat(desc.Format);
+				if (metal_format == MTLPixelFormatInvalid) { [descriptor release]; return 0; }
 				descriptor.mipmapLevelCount = mips;
-				descriptor.pixelFormat = MakeMetalPixelFormat(desc.Format);
+				descriptor.pixelFormat = metal_format;
 				descriptor.usage = 0;
 				if (desc.Usage & ResourceUsageShaderRead) {
 					descriptor.usage |= MTLTextureUsageShaderRead;
@@ -1413,6 +1690,33 @@ namespace Engine
 				result->Retain();
 				return result;
 			}
+			virtual IDeviceResource * OpenResource(IDeviceResourceHandle * handle) noexcept override
+			{
+				if (!handle || handle->GetDeviceIdentifier() != GetDeviceIdentifier()) return 0;
+				try {
+					SafePointer<MTL_SharedInfrastructure> shared = new MTL_SharedInfrastructure(static_cast<MTL_DeviceResourceHandle *>(handle));
+					SafePointer<MTL_Texture> result = new (std::nothrow) MTL_Texture(this);
+					result->shared = shared;
+					result->type = static_cast<TextureType>(shared->_meta->type);
+					result->format = static_cast<PixelFormat>(shared->_meta->format);
+					result->usage = shared->_meta->usage;
+					result->width = shared->_meta->width;
+					result->height = shared->_meta->height;
+					result->depth = shared->_meta->depth;
+					result->size = shared->_meta->size;
+					auto hook = [[ERTXPCHookIn alloc] init];
+					if (!hook) throw OutOfMemoryException();
+					hook->port = shared->_shared_port;
+					MTLSharedTextureHandle * metal_handle = 0;
+					@try { metal_handle = [[MTLSharedTextureHandle alloc] initWithCoder: hook]; } @catch (NSException *exception) {} @finally {}
+					[hook release];
+					result->texture = [device newSharedTextureWithHandle: metal_handle];
+					[metal_handle release];
+					if (!result->texture) return 0;
+					result->Retain();
+					return result;
+				} catch (...) { return 0; }
+			}
 			virtual IWindowLayer * CreateWindowLayer(Windows::ICoreWindow * window, const WindowLayerDesc & desc) noexcept override
 			{
 				try {
@@ -1472,6 +1776,17 @@ namespace Engine
 				device->Retain();
 				return device;
 			}
+			virtual IDeviceResourceHandle * QueryResourceHandle(IDeviceResource * resource) noexcept override
+			{
+				if (!resource || resource->GetResourceType() != ResourceType::Texture || resource->GetMemoryPool() != ResourceMemoryPool::Shared) return 0;
+				MTL_SharedInfrastructure * shared = static_cast<MTL_Texture *>(resource)->shared;
+				if (!shared) return 0;
+				MTL_DeviceResourceHandle * handle = shared->_handle;
+				if (!handle) return 0;
+				handle->Retain();
+				return handle;
+			}
+			virtual IDeviceResourceHandle * OpenResourceHandle(const DataBlock * data) noexcept override { try { return new MTL_DeviceResourceHandle(data); } catch (...) { return 0; } }
 			virtual string ToString(void) const override { return L"MTL_Factory"; }
 		};
 
@@ -1521,6 +1836,8 @@ namespace Engine
 					else if (format == PixelFormat::R8G8_sint) return MTLPixelFormatRG8Sint;
 					else if (format == PixelFormat::B5G6R5_unorm) return MTLPixelFormatB5G6R5Unorm;
 					else if (format == PixelFormat::B5G5R5A1_unorm) return MTLPixelFormatBGR5A1Unorm;
+					else if (format == PixelFormat::A1B5G5R5_unorm) return MTLPixelFormatA1BGR5Unorm;
+					else if (format == PixelFormat::A4B4G4R4_unorm) return MTLPixelFormatABGR4Unorm;
 					else return MTLPixelFormatInvalid;
 				} else if (bpp == 32) {
 					if (format == PixelFormat::R32_uint) return MTLPixelFormatR32Uint;
@@ -1586,6 +1903,293 @@ namespace Engine
 				[command waitUntilCompleted];
 			}
 			[surface getBytes: buffer bytesPerRow: stride bytesPerImage: 0 fromRegion: region mipmapLevel: subres.mip_level slice: subres.array_index];
+		}
+		void QueryMetalVersion(id<MTLDevice> device, uint & major, uint & minor) noexcept
+		{
+			if ([device supportsFamily: MTLGPUFamilyMetal3]) major = 3;
+			else if ([device supportsFamily: MTLGPUFamilyMac2]) major = 2;
+			else major = 1;
+			minor = 0;
+		}
+		bool QueryMetalFormatSupportForShaderRead(id<MTLDevice> device, Graphics::PixelFormat format) noexcept
+		{
+			if (IsColorFormat(format)) {
+				auto bpp = GetFormatBitsPerPixel(format);
+				if (bpp == 8) {
+					if (format == PixelFormat::A8_unorm) return true;
+					else if (format == PixelFormat::R8_unorm) return true;
+					else if (format == PixelFormat::R8_snorm) return true;
+					else if (format == PixelFormat::R8_uint) return true;
+					else if (format == PixelFormat::R8_sint) return true;
+					else return false;
+				} else if (bpp == 16) {
+					if (format == PixelFormat::R16_unorm) return true;
+					else if (format == PixelFormat::R16_snorm) return true;
+					else if (format == PixelFormat::R16_uint) return true;
+					else if (format == PixelFormat::R16_sint) return true;
+					else if (format == PixelFormat::R16_float) return true;
+					else if (format == PixelFormat::R8G8_unorm) return true;
+					else if (format == PixelFormat::R8G8_snorm) return true;
+					else if (format == PixelFormat::R8G8_uint) return true;
+					else if (format == PixelFormat::R8G8_sint) return true;
+					else if (format == PixelFormat::B5G6R5_unorm) return true;
+					else if (format == PixelFormat::B5G5R5A1_unorm) return true;
+					else if (format == PixelFormat::A1B5G5R5_unorm) return true;
+					else if (format == PixelFormat::A4B4G4R4_unorm) return true;
+					else return false;
+				} else if (bpp == 32) {
+					if (format == PixelFormat::R32_uint) return true;
+					else if (format == PixelFormat::R32_sint) return true;
+					else if (format == PixelFormat::R32_float) return true;
+					else if (format == PixelFormat::R16G16_unorm) return true;
+					else if (format == PixelFormat::R16G16_snorm) return true;
+					else if (format == PixelFormat::R16G16_uint) return true;
+					else if (format == PixelFormat::R16G16_sint) return true;
+					else if (format == PixelFormat::R16G16_float) return true;
+					else if (format == PixelFormat::B8G8R8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_snorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_uint) return true;
+					else if (format == PixelFormat::R8G8B8A8_sint) return true;
+					else if (format == PixelFormat::R10G10B10A2_unorm) return true;
+					else if (format == PixelFormat::R10G10B10A2_uint) return true;
+					else if (format == PixelFormat::R11G11B10_float) return true;
+					else if (format == PixelFormat::R9G9B9E5_float) return true;
+					else return false;
+				} else if (bpp == 64) {
+					if (format == PixelFormat::R32G32_uint) return true;
+					else if (format == PixelFormat::R32G32_sint) return true;
+					else if (format == PixelFormat::R32G32_float) return true;
+					else if (format == PixelFormat::R16G16B16A16_unorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_snorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_uint) return true;
+					else if (format == PixelFormat::R16G16B16A16_sint) return true;
+					else if (format == PixelFormat::R16G16B16A16_float) return true;
+					else return false;
+				} else if (bpp == 128) {
+					if (format == PixelFormat::R32G32B32A32_uint) return true;
+					else if (format == PixelFormat::R32G32B32A32_sint) return true;
+					else if (format == PixelFormat::R32G32B32A32_float) return true;
+					else return false;
+				} else return false;
+			} else if (IsDepthStencilFormat(format)) {
+				if (format == PixelFormat::D16_unorm) return true;
+				else if (format == PixelFormat::D32_float) return true;
+				else if (format == PixelFormat::D24S8_unorm) return [device isDepth24Stencil8PixelFormatSupported];
+				else if (format == PixelFormat::D32S8_float) return true;
+				else return false;
+			} else return false;
+		}
+		bool QueryMetalFormatSupportForShaderSample(id<MTLDevice> device, Graphics::PixelFormat format) noexcept
+		{
+			uint version, subversion;
+			QueryMetalVersion(device, version, subversion);
+			if (IsColorFormat(format)) {
+				auto bpp = GetFormatBitsPerPixel(format);
+				if (bpp == 8) {
+					if (format == PixelFormat::A8_unorm) return true;
+					else if (format == PixelFormat::R8_unorm) return true;
+					else if (format == PixelFormat::R8_snorm) return true;
+					else if (format == PixelFormat::R8_uint) return false;
+					else if (format == PixelFormat::R8_sint) return false;
+					else return false;
+				} else if (bpp == 16) {
+					if (format == PixelFormat::R16_unorm) return true;
+					else if (format == PixelFormat::R16_snorm) return true;
+					else if (format == PixelFormat::R16_uint) return false;
+					else if (format == PixelFormat::R16_sint) return false;
+					else if (format == PixelFormat::R16_float) return true;
+					else if (format == PixelFormat::R8G8_unorm) return true;
+					else if (format == PixelFormat::R8G8_snorm) return true;
+					else if (format == PixelFormat::R8G8_uint) return false;
+					else if (format == PixelFormat::R8G8_sint) return false;
+					else if (format == PixelFormat::B5G6R5_unorm) return version >= 4;
+					else if (format == PixelFormat::B5G5R5A1_unorm) return version >= 4;
+					else if (format == PixelFormat::A1B5G5R5_unorm) return version >= 4;
+					else if (format == PixelFormat::A4B4G4R4_unorm) return version >= 4;
+					else return false;
+				} else if (bpp == 32) {
+					if (format == PixelFormat::R32_uint) return false;
+					else if (format == PixelFormat::R32_sint) return false;
+					else if (format == PixelFormat::R32_float) return [device supports32BitFloatFiltering];
+					else if (format == PixelFormat::R16G16_unorm) return true;
+					else if (format == PixelFormat::R16G16_snorm) return true;
+					else if (format == PixelFormat::R16G16_uint) return false;
+					else if (format == PixelFormat::R16G16_sint) return false;
+					else if (format == PixelFormat::R16G16_float) return true;
+					else if (format == PixelFormat::B8G8R8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_snorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_uint) return false;
+					else if (format == PixelFormat::R8G8B8A8_sint) return false;
+					else if (format == PixelFormat::R10G10B10A2_unorm) return true;
+					else if (format == PixelFormat::R10G10B10A2_uint) return false;
+					else if (format == PixelFormat::R11G11B10_float) return true;
+					else if (format == PixelFormat::R9G9B9E5_float) return true;
+					else return false;
+				} else if (bpp == 64) {
+					if (format == PixelFormat::R32G32_uint) return false;
+					else if (format == PixelFormat::R32G32_sint) return false;
+					else if (format == PixelFormat::R32G32_float) return [device supports32BitFloatFiltering];
+					else if (format == PixelFormat::R16G16B16A16_unorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_snorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_uint) return false;
+					else if (format == PixelFormat::R16G16B16A16_sint) return false;
+					else if (format == PixelFormat::R16G16B16A16_float) return true;
+					else return false;
+				} else if (bpp == 128) {
+					if (format == PixelFormat::R32G32B32A32_uint) return false;
+					else if (format == PixelFormat::R32G32B32A32_sint) return false;
+					else if (format == PixelFormat::R32G32B32A32_float) return [device supports32BitFloatFiltering];
+					else return false;
+				} else return false;
+			} else if (IsDepthStencilFormat(format)) {
+				if (format == PixelFormat::D16_unorm) return true;
+				else if (format == PixelFormat::D32_float) return [device supports32BitFloatFiltering];
+				else if (format == PixelFormat::D24S8_unorm) return [device isDepth24Stencil8PixelFormatSupported];
+				else if (format == PixelFormat::D32S8_float) return false;
+				else return false;
+			} else return false;
+		}
+		bool QueryMetalFormatSupportForRenderTarget(id<MTLDevice> device, Graphics::PixelFormat format) noexcept
+		{
+			uint version, subversion;
+			QueryMetalVersion(device, version, subversion);
+			if (IsColorFormat(format)) {
+				auto bpp = GetFormatBitsPerPixel(format);
+				if (bpp == 8) {
+					if (format == PixelFormat::A8_unorm) return true;
+					else if (format == PixelFormat::R8_unorm) return true;
+					else if (format == PixelFormat::R8_snorm) return true;
+					else if (format == PixelFormat::R8_uint) return true;
+					else if (format == PixelFormat::R8_sint) return true;
+					else return false;
+				} else if (bpp == 16) {
+					if (format == PixelFormat::R16_unorm) return true;
+					else if (format == PixelFormat::R16_snorm) return true;
+					else if (format == PixelFormat::R16_uint) return true;
+					else if (format == PixelFormat::R16_sint) return true;
+					else if (format == PixelFormat::R16_float) return true;
+					else if (format == PixelFormat::R8G8_unorm) return true;
+					else if (format == PixelFormat::R8G8_snorm) return true;
+					else if (format == PixelFormat::R8G8_uint) return true;
+					else if (format == PixelFormat::R8G8_sint) return true;
+					else if (format == PixelFormat::B5G6R5_unorm) return version >= 4;
+					else if (format == PixelFormat::B5G5R5A1_unorm) return version >= 4;
+					else if (format == PixelFormat::A1B5G5R5_unorm) return version >= 4;
+					else if (format == PixelFormat::A4B4G4R4_unorm) return version >= 4;
+					else return false;
+				} else if (bpp == 32) {
+					if (format == PixelFormat::R32_uint) return true;
+					else if (format == PixelFormat::R32_sint) return true;
+					else if (format == PixelFormat::R32_float) return true;
+					else if (format == PixelFormat::R16G16_unorm) return true;
+					else if (format == PixelFormat::R16G16_snorm) return true;
+					else if (format == PixelFormat::R16G16_uint) return true;
+					else if (format == PixelFormat::R16G16_sint) return true;
+					else if (format == PixelFormat::R16G16_float) return true;
+					else if (format == PixelFormat::B8G8R8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_snorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_uint) return true;
+					else if (format == PixelFormat::R8G8B8A8_sint) return true;
+					else if (format == PixelFormat::R10G10B10A2_unorm) return true;
+					else if (format == PixelFormat::R10G10B10A2_uint) return true;
+					else if (format == PixelFormat::R11G11B10_float) return true;
+					else if (format == PixelFormat::R9G9B9E5_float) return version >= 4;
+					else return false;
+				} else if (bpp == 64) {
+					if (format == PixelFormat::R32G32_uint) return true;
+					else if (format == PixelFormat::R32G32_sint) return true;
+					else if (format == PixelFormat::R32G32_float) return true;
+					else if (format == PixelFormat::R16G16B16A16_unorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_snorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_uint) return true;
+					else if (format == PixelFormat::R16G16B16A16_sint) return true;
+					else if (format == PixelFormat::R16G16B16A16_float) return true;
+					else return false;
+				} else if (bpp == 128) {
+					if (format == PixelFormat::R32G32B32A32_uint) return true;
+					else if (format == PixelFormat::R32G32B32A32_sint) return true;
+					else if (format == PixelFormat::R32G32B32A32_float) return true;
+					else return false;
+				} else return false;
+			} else return false;
+		}
+		bool QueryMetalFormatSupportForBlendRenderTarget(id<MTLDevice> device, Graphics::PixelFormat format) noexcept
+		{
+			uint version, subversion;
+			QueryMetalVersion(device, version, subversion);
+			if (IsColorFormat(format)) {
+				auto bpp = GetFormatBitsPerPixel(format);
+				if (bpp == 8) {
+					if (format == PixelFormat::A8_unorm) return true;
+					else if (format == PixelFormat::R8_unorm) return true;
+					else if (format == PixelFormat::R8_snorm) return true;
+					else if (format == PixelFormat::R8_uint) return false;
+					else if (format == PixelFormat::R8_sint) return false;
+					else return false;
+				} else if (bpp == 16) {
+					if (format == PixelFormat::R16_unorm) return true;
+					else if (format == PixelFormat::R16_snorm) return true;
+					else if (format == PixelFormat::R16_uint) return false;
+					else if (format == PixelFormat::R16_sint) return false;
+					else if (format == PixelFormat::R16_float) return true;
+					else if (format == PixelFormat::R8G8_unorm) return true;
+					else if (format == PixelFormat::R8G8_snorm) return true;
+					else if (format == PixelFormat::R8G8_uint) return false;
+					else if (format == PixelFormat::R8G8_sint) return false;
+					else if (format == PixelFormat::B5G6R5_unorm) return version >= 4;
+					else if (format == PixelFormat::B5G5R5A1_unorm) return version >= 4;
+					else if (format == PixelFormat::A1B5G5R5_unorm) return version >= 4;
+					else if (format == PixelFormat::A4B4G4R4_unorm) return version >= 4;
+					else return false;
+				} else if (bpp == 32) {
+					if (format == PixelFormat::R32_uint) return false;
+					else if (format == PixelFormat::R32_sint) return false;
+					else if (format == PixelFormat::R32_float) return true;
+					else if (format == PixelFormat::R16G16_unorm) return true;
+					else if (format == PixelFormat::R16G16_snorm) return true;
+					else if (format == PixelFormat::R16G16_uint) return false;
+					else if (format == PixelFormat::R16G16_sint) return false;
+					else if (format == PixelFormat::R16G16_float) return true;
+					else if (format == PixelFormat::B8G8R8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_unorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_snorm) return true;
+					else if (format == PixelFormat::R8G8B8A8_uint) return false;
+					else if (format == PixelFormat::R8G8B8A8_sint) return false;
+					else if (format == PixelFormat::R10G10B10A2_unorm) return true;
+					else if (format == PixelFormat::R10G10B10A2_uint) return false;
+					else if (format == PixelFormat::R11G11B10_float) return true;
+					else if (format == PixelFormat::R9G9B9E5_float) return version >= 4;
+					else return false;
+				} else if (bpp == 64) {
+					if (format == PixelFormat::R32G32_uint) return false;
+					else if (format == PixelFormat::R32G32_sint) return false;
+					else if (format == PixelFormat::R32G32_float) return true;
+					else if (format == PixelFormat::R16G16B16A16_unorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_snorm) return true;
+					else if (format == PixelFormat::R16G16B16A16_uint) return false;
+					else if (format == PixelFormat::R16G16B16A16_sint) return false;
+					else if (format == PixelFormat::R16G16B16A16_float) return true;
+					else return false;
+				} else if (bpp == 128) {
+					if (format == PixelFormat::R32G32B32A32_uint) return false;
+					else if (format == PixelFormat::R32G32B32A32_sint) return false;
+					else if (format == PixelFormat::R32G32B32A32_float) return true;
+					else return false;
+				} else return false;
+			} else return false;
+		}
+		bool QueryMetalFormatSupportForDepthStencil(id<MTLDevice> device, Graphics::PixelFormat format) noexcept
+		{
+			if (IsDepthStencilFormat(format)) {
+				if (format == PixelFormat::D16_unorm) return true;
+				else if (format == PixelFormat::D32_float) return true;
+				else if (format == PixelFormat::D24S8_unorm) return [device isDepth24Stencil8PixelFormatSupported];
+				else if (format == PixelFormat::D32S8_float) return true;
+				else return false;
+			} else return false;
 		}
 	}
 }

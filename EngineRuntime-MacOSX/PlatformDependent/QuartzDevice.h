@@ -24,7 +24,7 @@ namespace Engine
 			void SetContext(void * context, int width, int height, int scale) noexcept;
 			void SetBitmapTarget(bool set) noexcept;
 			// Context information
-			virtual void GetImplementationInfo(string & tech, uint32 & version) override;
+			virtual void GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) override;
 			virtual uint32 GetFeatureList(void) noexcept override;
 			virtual ImmutableString ToString(void) const override;
 			// Creating brushes

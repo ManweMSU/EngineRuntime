@@ -391,7 +391,7 @@ namespace Engine
 				return true;
 			}
 			// Information API
-			virtual void GetImplementationInfo(string & tech, uint32 & version) override { tech = L"Metal"; version = 1; }
+			virtual void GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) override { try { tech = L"Metal"; } catch (...) {} MetalGraphics::QueryMetalVersion(_device, version_major, version_minor); }
 			virtual uint32 GetFeatureList(void) noexcept override
 			{
 				return DeviceContextFeatureBlurCapable | DeviceContextFeatureInversionCapable |
@@ -956,11 +956,12 @@ namespace Engine
 				return context;
 			} catch (...) { return 0; }
 		}
-		void PureMetalRenderingDeviceBeginDraw(Graphics::I2DDeviceContext * device, id<MTLCommandBuffer> command, id<MTLTexture> texture, uint width, uint height)
+		void PureMetalRenderingDeviceBeginDraw(Graphics::I2DDeviceContext * device, id<MTLCommandBuffer> command, id<MTLTexture> texture, uint width, uint height, MTLLoadAction load, const float * clear_value)
 		{
 			MTLRenderPassDescriptor * descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
 			descriptor.colorAttachments[0].texture = texture;
-			descriptor.colorAttachments[0].loadAction = MTLLoadActionLoad;
+			descriptor.colorAttachments[0].loadAction = load;
+			if (clear_value) descriptor.colorAttachments[0].clearColor = MTLClearColorMake(clear_value[0] * clear_value[3], clear_value[1] * clear_value[3], clear_value[2] * clear_value[3], clear_value[3]);
 			static_cast<MTL_2DDeviceContext *>(device)->BeginRendering(command, descriptor, width, height);
 		}
 		void PureMetalRenderingDeviceEndDraw(Graphics::I2DDeviceContext * device) { static_cast<MTL_2DDeviceContext *>(device)->EndRendering(0); }

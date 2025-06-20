@@ -176,7 +176,7 @@ namespace Engine
 			TextAlignmentBottom = 2
 		};
 
-		enum class TextureAlphaMode { Ignore, Premultiplied };
+		enum class TextureAlphaMode { Ignore = 0, Premultiplied = 1 };
 
 		class I2DDeviceContext;
 		class I2DDeviceContextFactory;
@@ -248,7 +248,7 @@ namespace Engine
 		class I2DDeviceContext : public Object
 		{
 		public:
-			virtual void GetImplementationInfo(string & tech, uint32 & version) = 0;
+			virtual void GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) = 0;
 			virtual uint32 GetFeatureList(void) noexcept = 0;
 
 			virtual IColorBrush * CreateSolidColorBrush(Color color) noexcept = 0;

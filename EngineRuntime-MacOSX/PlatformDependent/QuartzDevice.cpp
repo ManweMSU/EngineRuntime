@@ -435,7 +435,7 @@ namespace Engine
 			CGContextSetInterpolationQuality(reinterpret_cast<CGContextRef>(_context), kCGInterpolationNone);
 		}
 		void QuartzDeviceContext::SetBitmapTarget(bool set) noexcept { _bitmap_target_allowed = set; }
-		void QuartzDeviceContext::GetImplementationInfo(string & tech, uint32 & version) { tech = L"Quartz"; version = 1; }
+		void QuartzDeviceContext::GetImplementationInfo(string & tech, uint32 & version_major, uint32 & version_minor) { try { tech = L"Quartz"; } catch (...) {} version_major = 1; version_minor = 0; }
 		uint32 QuartzDeviceContext::GetFeatureList(void) noexcept
 		{
 			uint32 result = DeviceContextFeatureInversionCapable | DeviceContextFeaturePolygonCapable | DeviceContextFeatureLayersCapable;

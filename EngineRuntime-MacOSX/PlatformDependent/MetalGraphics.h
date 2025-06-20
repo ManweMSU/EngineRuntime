@@ -38,6 +38,7 @@ namespace Engine
 			void SetAutosize(bool autosize);
 			void SetOpaque(bool opaque);
 			void SetFramebufferOnly(bool framebuffer_only);
+			void SetExtendedDynamicRange(bool edr);
 			id<CAMetalDrawable> GetDrawable(void);
 		};
 
@@ -49,5 +50,12 @@ namespace Engine
 		id<MTLBuffer> GetInnerMetalBuffer(Graphics::IBuffer * buffer);
 		id<MTLTexture> GetInnerMetalTexture(Graphics::ITexture * texture);
 		MTLPixelFormat MakeMetalPixelFormat(Graphics::PixelFormat format);
+
+		void QueryMetalVersion(id<MTLDevice> device, uint & major, uint & minor) noexcept;
+		bool QueryMetalFormatSupportForShaderRead(id<MTLDevice> device, Graphics::PixelFormat format) noexcept;
+		bool QueryMetalFormatSupportForShaderSample(id<MTLDevice> device, Graphics::PixelFormat format) noexcept;
+		bool QueryMetalFormatSupportForRenderTarget(id<MTLDevice> device, Graphics::PixelFormat format) noexcept;
+		bool QueryMetalFormatSupportForBlendRenderTarget(id<MTLDevice> device, Graphics::PixelFormat format) noexcept;
+		bool QueryMetalFormatSupportForDepthStencil(id<MTLDevice> device, Graphics::PixelFormat format) noexcept;
 	}
 }

@@ -287,6 +287,7 @@ namespace Engine
 		} while (true);
 	}
 	void ExitProcess(int exit_code) noexcept { _exit(exit_code); }
+	bool IsProcessElevated(void) noexcept { return geteuid() == 0; }
 	Array<int> * EnumerateProcesses(void) noexcept
 	{
 		try {
