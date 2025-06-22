@@ -914,7 +914,6 @@ namespace Engine
 						else return false;
 					}
 					return true;
-
 				} else return !sync->lock.test_and_set(std::memory_order_acquire);
 			}
 			virtual bool ReleaseSharedResource(IDeviceResource * rsrc) noexcept override
