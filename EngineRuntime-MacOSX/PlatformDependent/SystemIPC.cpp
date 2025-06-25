@@ -1,7 +1,10 @@
 #include "../Interfaces/SystemIPC.h"
 
-#include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -11,85 +14,109 @@ namespace Engine
 {
 	namespace IPC
 	{
-		class SystemPipe : public IPipe
+		Array<char> * _encode_utf8(const string & str)
 		{
-			bool _unlink;
-			int _fid;
-			uint _access;
-			string _name, _path;
-			Array<char> _path_chars;
+			SafePointer< Array<char> > result = new Array<char>(1);
+			result->SetLength(str.GetEncodedLength(Encoding::UTF8) + 1);
+			str.Encode(result->GetBuffer(), Encoding::UTF8, true);
+			result->Retain();
+			return result;
+		}
+
+		class SystemConnection : public IConnection
+		{
+			int _socket;
 		public:
-			SystemPipe(const string & pipe_name, uint pipe_flags, uint * error) : _path_chars(0x10)
+			SystemConnection(const string & listener_name, uint flags, uint * error)
+			{
+				SafePointer< Array<char> > path;
+				try {
+					auto public_path = L"/tmp/pipe_" + listener_name;
+					path = _encode_utf8(public_path);
+				} catch (...) { if (error) *error = ErrorAllocation; throw; }
+				sockaddr_un addr;
+				ZeroMemory(&addr, sizeof(addr));
+				addr.sun_len = sizeof(addr);
+				addr.sun_family = PF_LOCAL;
+				if (path->Length() > sizeof(addr.sun_path)) { if (error) *error = ErrorBadFileName; throw InvalidArgumentException(); }
+				MemoryCopy(&addr.sun_path, path->GetBuffer(), path->Length());
+				_socket = socket(PF_LOCAL, SOCK_STREAM, 0);
+				if (_socket < 0) { if (error) *error = ErrorAllocation; throw Exception(); }
+				int status;
+				while (true) { if ((status = connect(_socket, reinterpret_cast<sockaddr *>(&addr), sizeof(addr))) >= 0 || errno != EINTR) break; }
+				if (status < 0) {
+					if (error) {
+						if (errno == EADDRNOTAVAIL || errno == ENAMETOOLONG) *error = ErrorBadFileName;
+						else if (errno == ECONNREFUSED || errno == ENOENT) *error = ErrorDoesNotExist;
+						else *error = ErrorAllocation;
+					}
+					close(_socket);
+					throw Exception();
+				}
+				*error = ErrorSuccess;
+			}
+			SystemConnection(int io) : _socket(io) {}
+			virtual ~SystemConnection(void) override { shutdown(_socket, SHUT_RDWR); close(_socket); }
+			virtual void Read(void * buffer, uint32 length) override { IO::ReadFile(reinterpret_cast<handle>(sintptr(_socket)), buffer, length); }
+			virtual void Write(const void * data, uint32 length) override { IO::WriteFile(reinterpret_cast<handle>(sintptr(_socket)), data, length); }
+			virtual int64 Seek(int64 position, Streaming::SeekOrigin origin) override { throw Exception(); }
+			virtual uint64 Length(void) override { throw Exception(); }
+			virtual void SetLength(uint64 length) override { throw Exception(); }
+			virtual void Flush(void) override {}
+			virtual handle GetIOHandle(void) noexcept override { return reinterpret_cast<handle>(sintptr(_socket)); }
+		};
+		class SystemConnectionListener : public IConnectionListener
+		{
+			string _name, _public_path;
+			SafePointer< Array<char> > _path;
+			int _socket;
+		public:
+			SystemConnectionListener(const string & listener_name, uint flags, uint * error)
 			{
 				try {
-					_name = pipe_name;
-					_path = L"/tmp/pipe_" + _name;
-					_path_chars.SetLength(_path.GetEncodedLength(Encoding::UTF8) + 1);
-					_path.Encode(_path_chars.GetBuffer(), Encoding::UTF8, true);
-				} catch (...) {
+					_name = listener_name;
+					_public_path = L"/tmp/pipe_" + _name;
+					_path = _encode_utf8(_public_path);
+				} catch (...) { if (error) *error = ErrorAllocation; throw; }
+				sockaddr_un addr;
+				ZeroMemory(&addr, sizeof(addr));
+				addr.sun_len = sizeof(addr);
+				addr.sun_family = PF_LOCAL;
+				if (_path->Length() > sizeof(addr.sun_path)) { if (error) *error = ErrorBadFileName; throw InvalidArgumentException(); }
+				MemoryCopy(&addr.sun_path, _path->GetBuffer(), _path->Length());
+				_socket = socket(PF_LOCAL, SOCK_STREAM, 0);
+				if (_socket < 0) { if (error) *error = ErrorAllocation; throw Exception(); }
+				if (bind(_socket, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+					if (error) {
+						if (errno == EADDRINUSE || errno == EEXIST) *error = ErrorAlreadyExists;
+						else if (errno == EADDRNOTAVAIL || errno == ENAMETOOLONG) *error = ErrorBadFileName;
+						else *error = ErrorAllocation;
+					}
+					close(_socket);
+					throw Exception();
+				}
+				if (listen(_socket, SOMAXCONN) < 0) {
 					if (error) *error = ErrorAllocation;
-					throw;
+					unlink(*_path); close(_socket);
+					throw Exception();
 				}
-				if (pipe_flags & PipeCreateNew) {
-					if (mkfifo(_path_chars, 0666) == -1) {
-						if (error) {
-							if (errno == EEXIST) *error = ErrorAlreadyExists;
-							else *error = ErrorAllocation;
-						}
-						throw Exception();
-					}
-					_unlink = true;
-				} else _unlink = false;
-				try {
-					if (pipe_flags & PipeAccessModeRead) {
-						_access = PipeAccessModeRead;
-						if (pipe_flags & PipeAccessModeWrite) { if (error) *error = ErrorInvalidArgument; throw Exception(); }
-						_fid = open(_path_chars, O_RDONLY | O_NONBLOCK);
-					} else if (pipe_flags & PipeAccessModeWrite) {
-						_access = PipeAccessModeWrite;
-						if (pipe_flags & PipeAccessModeRead) { if (error) *error = ErrorInvalidArgument; throw Exception(); }
-						if (pipe_flags & PipeCreateNew) {
-							_fid = open(_path_chars, O_WRONLY);
-						} else {
-							_fid = open(_path_chars, O_WRONLY | O_NONBLOCK);
-						}
-					} else { if (error) *error = ErrorInvalidArgument; throw Exception(); }
-					if (_fid == -1) {
-						if (error) {
-							if (errno == ENOENT) *error = ErrorNotExists;
-							else if (errno == ENXIO) *error = ErrorWrongMode;
-							else *error = ErrorAllocation;
-						}
-						throw Exception();
-					}
-					fcntl(_fid, F_SETFL, fcntl(_fid, F_GETFL) & ~O_NONBLOCK);
-					struct stat fs;
-					if (fstat(_fid, &fs) == -1) {
-						close(_fid);
-						if (error) *error = ErrorAllocation;
-						throw Exception();
-					}
-					if ((fs.st_mode & S_IFMT) != S_IFIFO) {
-						close(_fid);
-						if (error) *error = ErrorAllocation;
-						throw Exception();
-					}
-				} catch (...) {
-					if (_unlink) unlink(_path_chars);
-					throw;
-				}
-				if (error) *error = ErrorSuccess;
+				*error = ErrorSuccess;
 			}
-			virtual ~SystemPipe(void) override { close(_fid); if (_unlink) unlink(_path_chars); }
-			virtual handle GetIOHandle(void) noexcept override { return handle(sintptr(_fid)); }
-			virtual string GetOSPath(void) override { return _path; }
-			virtual string GetPipeName(void) override { return _name; }
-			virtual uint GetAccessMode(void) noexcept override { return _access; }
+			virtual ~SystemConnectionListener(void) override { unlink(*_path); shutdown(_socket, SHUT_RDWR); close(_socket); }
+			virtual IConnection * Accept(void) noexcept override
+			{
+				int io;
+				while (true) { if ((io = accept(_socket, 0, 0)) >= 0 || errno != EINTR) break; }
+				if (io < 0) return 0;
+				try { return new SystemConnection(io); } catch (...) { close(io); return 0; }
+			}
+			virtual string GetOSPath(void) override { return _public_path; }
+			virtual string GetListenerName(void) override { return _name; }
 		};
 		class SystemSharedMemory : public ISharedMemory
 		{
 			string _name;
-			Array<char> _name_chars;
+			SafePointer< Array<char> > _path;
 			int _file;
 			uint _length;
 			bool _unlink;
@@ -97,47 +124,39 @@ namespace Engine
 		public:
 			SystemSharedMemory(const string & segment_name, uint length, uint flags, uint * error) : _pdata(0)
 			{
+				if (!length) { if (error) *error = ErrorInvalidArgument; throw InvalidArgumentException(); }
 				try {
 					_name = segment_name;
-					_name_chars.SetLength(_name.GetEncodedLength(Encoding::UTF8) + 1);
-					_name.Encode(_name_chars.GetBuffer(), Encoding::UTF8, true);
-				} catch (...) {
-					if (error) *error = ErrorAllocation;
-					throw;
+					_path = _encode_utf8(segment_name);
+				} catch (...) { if (error) *error = ErrorAllocation; throw; }
+				_unlink = (flags & SharedMemoryCreateNew) != 0;
+				int flag = O_RDWR;
+				if (_unlink) flag |= O_CREAT | O_EXCL;
+				while (true) {
+					_file = shm_open(*_path, flag, 0666);
+					if (_file >= 0 || errno != EINTR) break;
 				}
-				if (!length) {
-					if (error) *error = ErrorInvalidArgument;
+				if (_file < 0) {
+					if (error) {
+						if (errno == EEXIST) *error = ErrorAlreadyExists;
+						else if (errno == ENOENT) *error = ErrorDoesNotExist;
+						else if (errno == ENAMETOOLONG) *error = ErrorBadFileName;
+						else *error = ErrorAllocation;
+					}
 					throw Exception();
 				}
-				if (flags & SharedMemoryCreateNew) {
+				if (_unlink) {
 					_length = length;
-					_unlink = true;
-					_file = shm_open(_name_chars, O_RDWR | O_CREAT | O_EXCL, 0666);
-					if (_file == -1) {
-						if (error) {
-							if (errno == EEXIST) *error = ErrorAlreadyExists;
-							else *error = ErrorAllocation;
+					while (true) {
+						if (ftruncate(_file, length) >= 0) break; else if (errno != EINTR) {
+							close(_file); shm_unlink(*_path);
+							if (error) *error = ErrorAllocation;
+							throw Exception();
 						}
-						throw Exception();
-					}
-					if (ftruncate(_file, length) == -1) {
-						close(_file);
-						shm_unlink(_name_chars);
-						if (error) *error = ErrorAllocation;
-						throw Exception();
 					}
 				} else {
-					_unlink = false;
-					_file = shm_open(_name_chars, O_RDWR);
-					if (_file == -1) {
-						if (error) {
-							if (errno == ENOENT) *error = ErrorNotExists;
-							else *error = ErrorAllocation;
-						}
-						throw Exception();
-					}
 					struct stat fs;
-					if (fstat(_file, &fs) == -1) {
+					if (fstat(_file, &fs) < 0) {
 						close(_file);
 						if (error) *error = ErrorAllocation;
 						throw Exception();
@@ -147,7 +166,7 @@ namespace Engine
 				}
 				if (error) *error = ErrorSuccess;
 			}
-			virtual ~SystemSharedMemory(void) override { Unmap(); close(_file); if (_unlink) shm_unlink(_name_chars); }
+			virtual ~SystemSharedMemory(void) override { Unmap(); close(_file); if (_unlink) shm_unlink(*_path); }
 			virtual string GetSegmentName(void) override { return _name; }
 			virtual uint GetLength(void) noexcept override { return _length; }
 			virtual bool Map(void ** pdata, uint map_flags) noexcept override
@@ -164,78 +183,49 @@ namespace Engine
 				if (pdata) *pdata = _pdata;
 				return true;
 			}
-			virtual void Unmap(void) noexcept override
-			{
-				if (_pdata) {
-					munmap(_pdata, _length);
-					_pdata = 0;
-				}
-			}
+			virtual void Unmap(void) noexcept override { if (_pdata) { munmap(_pdata, _length); _pdata = 0; } }
 		};
-		class SystemSharedSemaphore : public ISharedSemaphore
+		class SystemSharedLock : public ISharedLock
 		{
 			string _name;
-			Array<char> _name_chars;
+			SafePointer< Array<char> > _path;
 			int _file;
 			bool _locked;
 		public:
-			SystemSharedSemaphore(const string & semaphore_name, uint * error) : _locked(false)
+			SystemSharedLock(const string & lock_name, uint * error) : _locked(false)
 			{
 				try {
-					string name_ex = L"/tmp/lock_" + semaphore_name;
-					_name = semaphore_name;
-					_name_chars.SetLength(name_ex.GetEncodedLength(Encoding::UTF8) + 1);
-					name_ex.Encode(_name_chars.GetBuffer(), Encoding::UTF8, true);
-				} catch (...) {
-					if (error) *error = ErrorAllocation;
-					throw;
+					string path = L"/tmp/lock_" + lock_name;
+					_name = lock_name;
+					_path = _encode_utf8(path);
+				} catch (...) { if (error) *error = ErrorAllocation; throw; }
+				while (true) {
+					_file = open(*_path, O_RDONLY | O_CREAT, 0666);
+					if (_file >= 0 || errno != EINTR) break;
 				}
-				_file = open(_name_chars, O_RDONLY | O_CREAT, 0666);
-				if (_file == -1) {
-					if (error) *error = ErrorAllocation;
+				if (_file < 0) {
+					if (error) {
+						if (errno == EISDIR) *error = ErrorAlreadyExists;
+						else if (errno == ENAMETOOLONG || errno == EILSEQ) *error = ErrorBadFileName;
+						else *error = ErrorAllocation;
+					}
 					throw Exception();
 				}
 				if (error) *error = ErrorSuccess;
 			}
-			virtual ~SystemSharedSemaphore(void) override { if (_locked) flock(_file, LOCK_UN); close(_file); }
-			virtual string GetSemaphoreName(void) override { return _name; }
-			virtual bool TryWait(void) noexcept override
-			{
-				if (_locked) return false;
-				int result = flock(_file, LOCK_EX | LOCK_NB);
-				if (result == -1) return false;
-				_locked = true;
-				return true;
-			}
+			virtual ~SystemSharedLock(void) override { if (_locked) flock(_file, LOCK_UN); close(_file); }
+			virtual string GetLockName(void) override { return _name; }
+			virtual bool TryWait(void) noexcept override { if (_locked) return false; if (flock(_file, LOCK_EX | LOCK_NB) < 0) return false; _locked = true; return true; }
 			virtual void Open(void) noexcept override { if (_locked) { flock(_file, LOCK_UN); _locked = false; } }
 		};
 
-		IPipe * CreateNamedPipe(const string & pipe_name, uint pipe_flags, uint * error) { try { return new SystemPipe(pipe_name, pipe_flags, error); } catch (...) { return 0; } }
-		ISharedMemory * CreateSharedMemory(const string & segment_name, uint length, uint flags, uint * error) { try { return new SystemSharedMemory(segment_name, length, flags, error); } catch (...) { return 0; } }
-		ISharedSemaphore * CreateSharedSemaphore(const string & semaphore_name, uint * error) { try { return new SystemSharedSemaphore(semaphore_name, error); } catch (...) { return 0; } }
-		
-		void DestroyNamedPipe(const string & name)
-		{
-			Array<char> chars(1);
-			string path = L"/tmp/pipe_" + name;
-			chars.SetLength(path.GetEncodedLength(Encoding::UTF8) + 1);
-			path.Encode(chars.GetBuffer(), Encoding::UTF8, true);
-			unlink(chars);
-		}
-		void DestroySharedMemory(const string & name)
-		{
-			Array<char> chars(1);
-			chars.SetLength(name.GetEncodedLength(Encoding::UTF8) + 1);
-			name.Encode(chars.GetBuffer(), Encoding::UTF8, true);
-			shm_unlink(chars);
-		}
-		void DestroySharedSemaphore(const string & name)
-		{
-			Array<char> chars(1);
-			string path = L"/tmp/lock_" + name;
-			chars.SetLength(path.GetEncodedLength(Encoding::UTF8) + 1);
-			path.Encode(chars.GetBuffer(), Encoding::UTF8, true);
-			unlink(chars);
-		}
+		IConnection * Connect(const string & listener_name, uint flags, uint * error) noexcept { try { if (error) *error = ErrorAllocation; return new SystemConnection(listener_name, flags, error); } catch (...) { return 0; } }
+		IConnectionListener * CreateConnectionListener(const string & listener_name, uint flags, uint * error) noexcept { try { if (error) *error = ErrorAllocation; return new SystemConnectionListener(listener_name, flags, error); } catch (...) { return 0; } }
+		ISharedMemory * CreateSharedMemory(const string & segment_name, uint length, uint flags, uint * error) noexcept { try { if (error) *error = ErrorAllocation; return new SystemSharedMemory(segment_name, length, flags, error); } catch (...) { return 0; } }
+		ISharedLock * CreateSharedLock(const string & lock_name, uint * error) noexcept { try { if (error) *error = ErrorAllocation; return new SystemSharedLock(lock_name, error); } catch (...) { return 0; } }
+
+		void DestroyConnectionListener(const string & name) noexcept { try { SafePointer< Array<char> > utf = _encode_utf8(L"/tmp/pipe_" + name); unlink(*utf); } catch (...) {} }
+		void DestroySharedMemory(const string & name) noexcept { try { SafePointer< Array<char> > utf = _encode_utf8(name); shm_unlink(*utf); } catch (...) {} }
+		void DestroySharedLock(const string & name) noexcept { try { SafePointer< Array<char> > utf = _encode_utf8(L"/tmp/lock_" + name); unlink(*utf); } catch (...) {} }
 	}
 }
