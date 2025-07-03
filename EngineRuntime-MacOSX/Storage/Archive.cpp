@@ -61,12 +61,20 @@ namespace Engine
 				SafePointer<Streaming::Stream> inner;
 				SafePointer<Registry> metadata;
 				Array<ArchiveFileDescriptor> files;
+				static void ValidateMemoryString(const uint8 * data, int size, int data_at)
+				{
+					if (data_at < 0 || data_at > size || size - data_at < 2) throw InvalidFormatException();
+					int pos = data_at;
+					while (size - pos >= 2 && *reinterpret_cast<const uint16 *>(data + pos)) pos += 2;
+					if (size - data_at < 2) throw InvalidFormatException();
+				}
 				template <class ArchiveHeader, class ArchiveFileHeader> void LoadArchiveData(void)
 				{
 					ArchiveHeader hdr;
 					inner->Read(&hdr, sizeof(hdr));
+					if (hdr.FileCount > 0x7FFFFFFFU || hdr.StringsSize > 0x7FFFFFFFU) throw InvalidFormatException();
 					files = Array<ArchiveFileDescriptor>(max(uint32(hdr.FileCount), 1U));
-					Array<uint8> strings(0x100);
+					Array<uint8> strings(1);
 					strings.SetLength(uint32(hdr.StringsSize));
 					uint64 pos = inner->Seek(0, Streaming::Current);
 					inner->Seek(hdr.StringsOffset, Streaming::Begin);
@@ -81,6 +89,7 @@ namespace Engine
 						file.Type = fhdr.FileType;
 						file.ID = fhdr.FileID;
 						file.Custom = fhdr.Custom;
+						ValidateMemoryString(strings.GetBuffer(), strings.Length(), fhdr.NameOffset);
 						file.Name = string(strings.GetBuffer() + fhdr.NameOffset, -1, Encoding::UTF16);
 						files << file;
 					}
@@ -478,8 +487,8 @@ namespace Engine
 				virtual string ToString(void) const override { return L"NewArchive"; }
 			};
 		}
-		Archive * OpenArchive(Streaming::Stream * at) { return OpenArchive(at, ArchiveMetadataUsage::LoadMetadata); }
-		Archive * OpenArchive(Streaming::Stream * at, ArchiveMetadataUsage metadata_usage) { try { return new Archives::Archive(at, metadata_usage); } catch (...) { return 0; } }
+		Archive * OpenArchive(Streaming::Stream * at) noexcept { return OpenArchive(at, ArchiveMetadataUsage::LoadMetadata); }
+		Archive * OpenArchive(Streaming::Stream * at, ArchiveMetadataUsage metadata_usage) noexcept { try { return new Archives::Archive(at, metadata_usage); } catch (...) { return 0; } }
 		NewArchive * CreateArchive(Streaming::Stream * at, int num_files, uint flags)
 		{
 			if (num_files < 0 || !at) throw InvalidArgumentException();

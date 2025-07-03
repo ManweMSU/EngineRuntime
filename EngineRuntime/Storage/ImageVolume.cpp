@@ -164,7 +164,7 @@ namespace Engine
 				ImageVolumeHeader hdr;
 				Array<ImageVolumeFrameHeader> fhdr(0x10);
 				stream->Read(&hdr, sizeof(hdr));
-				if (MemoryCompare(&hdr.Signature, "ecs.1.0", 8) != 0 || hdr.SignatureEx != 0x80000006 || hdr.Version != 0 || hdr.FrameCount == 0) throw InvalidFormatException();
+				if (MemoryCompare(&hdr.Signature, "ecs.1.0", 8) != 0 || hdr.SignatureEx != 0x80000006 || hdr.Version != 0 || hdr.FrameCount == 0 || hdr.FrameCount > 0x00FFFFFFU) throw InvalidFormatException();
 				fhdr.SetLength(hdr.FrameCount);
 				stream->Read(fhdr.GetBuffer(), sizeof(ImageVolumeFrameHeader) * hdr.FrameCount);
 				if (load_best_dpi_only) {
@@ -181,8 +181,8 @@ namespace Engine
 				for (int i = 0; i < fhdr.Length(); i++) {
 					Streaming::FragmentStream source(stream, fhdr[i].DataOffset, fhdr[i].DataSize);
 					Streaming::MemoryStream dec(0x10000);
-					if ((fhdr[i].DataCompression & 0xF0) == 16) ChainDecompress(&dec, &source);
-					else source.CopyTo(&dec);
+					if ((fhdr[i].DataCompression & 0xF0) == 16) ChainDecompress(&dec, &source); else source.CopyTo(&dec);
+					if (dec.Length() > 0x7FFFFFFFU || uint64(fhdr[i].Width) * uint64(fhdr[i].Height) > 0x1FFFFFFFU) throw InvalidFormatException();
 					uint8 * data_ptr = reinterpret_cast<uint8 *>(dec.GetBuffer());
 					int32 data_len = int32(dec.Length());
 					for (int j = 1; j < data_len; j++) data_ptr[j] += data_ptr[j - 1];
@@ -233,14 +233,15 @@ namespace Engine
 						dec.Read(&clrused, 1);
 						if (clrused == 0) clrused = 0x100;
 						Array<uint32> plt(0x100);
-						plt.SetLength(clrused);
+						plt.SetLength(0x100);
+						ZeroMemory(plt.GetBuffer(), 0x400);
 						dec.Read(plt.GetBuffer(), 4 * clrused);
 						for (int j = 0; j < s; j++) {
 							uint32 v = 0;
 							dec.Read(&v, 1);
 							pixel[j].Value = plt[v];
 						}
-					}
+					} else throw InvalidFormatException();
 					SafePointer<Engine::Codec::Frame> decoded = new Engine::Codec::Frame(fhdr[i].Width, fhdr[i].Height, fhdr[i].Width * 4, Engine::Codec::PixelFormat::B8G8R8A8, Engine::Codec::AlphaMode::Normal, Engine::Codec::ScanOrigin::BottomUp);
 					if (fhdr[i].Usage == 1) decoded->Usage = Engine::Codec::FrameUsage::NormalMap;
 					else if (fhdr[i].Usage == 2) decoded->Usage = Engine::Codec::FrameUsage::LightMap;
@@ -265,8 +266,7 @@ namespace Engine
 					stream->Seek(0, Streaming::Begin);
 					if (MemoryCompare(&hdr.Signature, "ecs.1.0", 8) == 0 && hdr.SignatureEx == 0x80000006 && hdr.Version == 0 && hdr.FrameCount != 0) return L"EIWV";
 					else return L"";
-				}
-				catch (...) { return L""; }
+				} catch (...) { return L""; }
 			}
 			virtual bool CanEncode(const string & format) override { return format == L"EIWV"; }
 			virtual bool CanDecode(const string & format) override { return format == L"EIWV"; }

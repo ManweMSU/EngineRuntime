@@ -296,7 +296,7 @@ namespace Engine
 						result += string(uint32(value_binary[i]), L"0123456789ABCDEF", 2);
 					}
 					return result.ToString();
-				} else return 0;
+				} else return L"";
 			}
 			int64 GetLongInteger(void) const
 			{
@@ -454,11 +454,10 @@ namespace Engine
 				if (attach) {
 					Nodes.Insert(attach, at);
 				} else {
-					RegistryNodeImplementation * node = new RegistryNodeImplementation;
+					SafePointer<RegistryNodeImplementation> node = new RegistryNodeImplementation;
 					Nodes.Insert(node, at);
-					node->Release();
 				}
-				NodeNames.Insert(name, at);
+				try { NodeNames.Insert(name, at); } catch (...) { Nodes.Remove(at); throw; }
 				return at;
 			}
 			int CreateRawValue(const string & name, RegistryValueType type)
@@ -475,7 +474,7 @@ namespace Engine
 					}
 				}
 				Values.Insert(RegistryValue(type), at);
-				ValueNames.Insert(name, at);
+				try { ValueNames.Insert(name, at); } catch (...) { Values.Remove(at); throw; }
 				return at;
 			}
 
@@ -667,41 +666,60 @@ namespace Engine
 				if (storage) storage->Set(value, size);
 			}
 
+			static void ValidateMemoryRange(const uint8 * data, int size, int data_at, int of_length)
+			{
+				if (data_at < 0 || data_at > size || size - data_at < of_length) throw InvalidFormatException();
+			}
+			static void ValidateMemoryString(const uint8 * data, int size, int data_at)
+			{
+				if (data_at < 0 || data_at > size || size - data_at < 2) throw InvalidFormatException();
+				int pos = data_at;
+				while (size - pos >= 2 && *reinterpret_cast<const uint16 *>(data + pos)) pos += 2;
+				if (size - data_at < 2) throw InvalidFormatException();
+			}
 			void FillFromMemoryData(const uint8 * data, int size, int data_at)
 			{
+				if (data_at < 0 || data_at > size || size - data_at < 8) throw InvalidFormatException();
 				int32 NodeCount, ValueCount;
 				NodeCount = *reinterpret_cast<const int32 *>(data + data_at);
 				ValueCount = *reinterpret_cast<const int32 *>(data + data_at + 4);
+				if (size - data_at < 8 + 8 * NodeCount + 4 * ValueCount) throw InvalidFormatException();
 				for (int i = 0; i < NodeCount; i++) {
 					int32 NodeOffset = *reinterpret_cast<const int32 *>(data + data_at + 8 + 4 * i);
 					int32 NodeNameOffset = *reinterpret_cast<const int32 *>(data + data_at + 8 + 4 * NodeCount + 4 * i);
-					auto subnode = new RegistryNodeImplementation;
+					ValidateMemoryString(data, size, NodeNameOffset);
+					SafePointer<RegistryNodeImplementation> subnode = new RegistryNodeImplementation;
 					subnode->FillFromMemoryData(data, size, NodeOffset);
 					CreateRawNode(string(data + NodeNameOffset, -1, Encoding::UTF16), subnode);
-					subnode->Release();
 				}
 				for (int i = 0; i < ValueCount; i++) {
 					int32 ValueOffset = *reinterpret_cast<const int32 *>(data + data_at + 8 + 8 * NodeCount + 4 * i);
+					ValidateMemoryRange(data, size, ValueOffset, 8);
 					int32 ValueNameOffset = *reinterpret_cast<const int32 *>(data + ValueOffset);
 					int32 ValueTypeCode = *reinterpret_cast<const int32 *>(data + ValueOffset + 4);
+					ValidateMemoryString(data, size, ValueNameOffset);
 					int index = CreateRawValue(string(data + ValueNameOffset, -1, Encoding::UTF16), static_cast<RegistryValueType>(ValueTypeCode));
 					auto & value = Values[index];
-					if (value.type == RegistryValueType::Integer || value.type == RegistryValueType::Float ||
-						value.type == RegistryValueType::Boolean || value.type == RegistryValueType::Color) {
+					if (value.type == RegistryValueType::Integer || value.type == RegistryValueType::Float || value.type == RegistryValueType::Boolean || value.type == RegistryValueType::Color) {
+						ValidateMemoryRange(data, size, ValueOffset, 12);
 						int32 short_value = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						value.value_int32 = short_value;
-					} else if (value.type == RegistryValueType::LongInteger || value.type == RegistryValueType::Time ||
-						value.type == RegistryValueType::LongFloat) {
+					} else if (value.type == RegistryValueType::LongInteger || value.type == RegistryValueType::Time || value.type == RegistryValueType::LongFloat) {
+						ValidateMemoryRange(data, size, ValueOffset, 16);
 						int64 long_value = *reinterpret_cast<const int64 *>(data + ValueOffset + 8);
 						value.value_int64 = long_value;
 					} else if (value.type == RegistryValueType::String) {
+						ValidateMemoryRange(data, size, ValueOffset, 12);
 						int32 offset = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
+						ValidateMemoryString(data, size, offset);
 						value.Set(string(data + offset, -1, Encoding::UTF16));
 					} else if (value.type == RegistryValueType::Binary) {
+						ValidateMemoryRange(data, size, ValueOffset, 16);
 						int32 size = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						int32 offset = *reinterpret_cast<const int32 *>(data + ValueOffset + 12);
+						ValidateMemoryRange(data, size, offset, size);
 						value.Set(data + offset, size);
-					}
+					} else value.type = RegistryValueType::Unknown;
 				}
 			}
 			void FillFromNode(const RegistryNodeImplementation * src)
@@ -905,20 +923,22 @@ namespace Engine
 			}
 		}
 		Registry * CreateRegistry(void) { return new RegistryImplementation; }
-		Registry * LoadRegistry(Streaming::Stream * source)
+		Registry * LoadRegistry(Streaming::Stream * source) noexcept
 		{
 			try {
 				EngineRegistryHeader hdr;
 				source->Read(&hdr, sizeof(hdr));
-				if (MemoryCompare(hdr.Signature, "ecs.1.0", 8) != 0 || hdr.SignatureEx != 0x80000004 || hdr.Version != 0)
-					throw InvalidFormatException();
+				if (MemoryCompare(hdr.Signature, "ecs.1.0", 8) != 0 || hdr.SignatureEx != 0x80000004 || hdr.Version != 0 || hdr.DataOffset > 0x7FFFFFFFU || hdr.DataSize > 0x7FFFFFFFU) throw InvalidFormatException();
 				Array<uint8> data(hdr.DataSize);
 				data.SetLength(hdr.DataSize);
 				source->Seek(hdr.DataOffset, Streaming::Begin);
 				source->Read(data.GetBuffer(), hdr.DataSize);
-				RegistryNodeImplementation * root = new RegistryNodeImplementation;
+				SafePointer<RegistryNodeImplementation> root = new RegistryNodeImplementation;
 				root->FillFromMemoryData(data.GetBuffer(), data.Length(), hdr.RootOffset);
-				return new RegistryImplementation(root);
+				SafePointer<RegistryImplementation> reg = new RegistryImplementation(root);
+				root->Retain();
+				reg->Retain();
+				return reg;
 			} catch (...) { return 0; }
 		}
 		Registry * CreateRegistryFromNode(RegistryNode * node)

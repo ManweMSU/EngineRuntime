@@ -1432,7 +1432,7 @@ namespace Engine
 				desc.Position = rect;
 				desc.MinimalConstraints = desc.MaximalConstraints = Point(0, 0);
 				desc.Callback = 0;
-				desc.ParentWindow = 0;
+				desc.ParentWindow = system->GetWindow();
 				desc.Screen = 0;
 				auto window = CreateWindow(desc, device);
 				return GetRootControl(window);

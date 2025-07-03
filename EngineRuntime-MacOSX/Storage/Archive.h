@@ -56,8 +56,8 @@ namespace Engine
 			virtual void SetFileCompressionFlag(ArchiveFile file, bool flag) = 0;
 			virtual void Finalize(void) = 0;
 		};
-		Archive * OpenArchive(Streaming::Stream * at);
-		Archive * OpenArchive(Streaming::Stream * at, ArchiveMetadataUsage metadata_usage);
+		Archive * OpenArchive(Streaming::Stream * at) noexcept;
+		Archive * OpenArchive(Streaming::Stream * at, ArchiveMetadataUsage metadata_usage) noexcept;
 		NewArchive * CreateArchive(Streaming::Stream * at, int num_files, uint flags = NewArchiveFlags::UseFormat64 | NewArchiveFlags::CreateMetadata);
 	}
 }

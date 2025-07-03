@@ -134,8 +134,8 @@ namespace Engine
 		void MemoryStream::Write(const void * _data, uint32 length)
 		{
 			if (length > uint32(data.Length() - pointer)) {
-				if (length > 0x7FFFFFFF) throw InvalidArgumentException();
-				if (uint32(pointer) + length > 0x7FFFFFFF) throw FileAccessException(Error::FileTooLarge);
+				if (length > 0x7FFFFFFFU) throw InvalidArgumentException();
+				if (uint32(pointer) + length > 0x7FFFFFFFU) throw FileAccessException(Error::FileTooLarge);
 				data.SetLength(pointer + int(length));
 			}
 			MemoryCopy(data.GetBuffer() + pointer, _data, length);
@@ -153,7 +153,7 @@ namespace Engine
 		uint64 MemoryStream::Length(void) { return uint64(data.Length()); }
 		void MemoryStream::SetLength(uint64 length)
 		{
-			if (length > 0x7FFFFFFF) throw InvalidArgumentException();
+			if (length > 0x7FFFFFFFU) throw InvalidArgumentException();
 			data.SetLength(int(length));
 		}
 		void MemoryStream::Flush(void) {}
