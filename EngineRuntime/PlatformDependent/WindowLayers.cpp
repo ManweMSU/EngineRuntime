@@ -23,9 +23,59 @@ namespace Engine
 {
 	namespace Windows
 	{
+		class WindowsModernAPI : public Object
+		{
+			typedef HRESULT (WINAPI * func_CreateDispatcherQueueController) (DispatcherQueueOptions options, PDISPATCHERQUEUECONTROLLER * dispatcherQueueController);
+			typedef HRESULT (WINAPI * func_WindowsCreateString) (PCNZWCH sourceString, UINT32 length, HSTRING * string);
+			typedef PCWSTR (WINAPI * func_WindowsGetStringRawBuffer) (HSTRING string, UINT32 * length);
+		private:
+			HMODULE _lib_core_messaging, _lib_com_base;
+			func_CreateDispatcherQueueController CreateDispatcherQueueController;
+			ABI::Windows::System::IDispatcherQueueController * controller;
+		public:
+			func_WindowsCreateString WindowsCreateString;
+			func_WindowsGetStringRawBuffer WindowsGetStringRawBuffer;
+		private:
+			WindowsModernAPI(void) : controller(0)
+			{
+				_lib_com_base = LoadLibraryW(L"combase.dll");
+				if (!_lib_com_base) throw Exception();
+				_lib_core_messaging = LoadLibraryW(L"CoreMessaging.dll");
+				if (!_lib_core_messaging) { FreeLibrary(_lib_com_base); throw Exception(); }
+				WindowsCreateString = reinterpret_cast<func_WindowsCreateString>(GetProcAddress(_lib_com_base, "WindowsCreateString"));
+				WindowsGetStringRawBuffer = reinterpret_cast<func_WindowsGetStringRawBuffer>(GetProcAddress(_lib_com_base, "WindowsGetStringRawBuffer"));
+				CreateDispatcherQueueController = reinterpret_cast<func_CreateDispatcherQueueController>(GetProcAddress(_lib_core_messaging, "CreateDispatcherQueueController"));
+				if (!CreateDispatcherQueueController || !WindowsCreateString || !WindowsGetStringRawBuffer) { FreeLibrary(_lib_com_base); FreeLibrary(_lib_core_messaging); throw Exception(); }
+				DispatcherQueueOptions options;
+				options.dwSize = sizeof(options);
+				options.threadType = DQTYPE_THREAD_CURRENT;
+				options.apartmentType = DQTAT_COM_ASTA;
+				if (CreateDispatcherQueueController(options, &controller) != S_OK) { FreeLibrary(_lib_com_base); FreeLibrary(_lib_core_messaging); throw Exception(); }
+			}
+		public:
+			static SafePointer<WindowsModernAPI> Common;
+		public:
+			static bool InitInstance(void) noexcept
+			{
+				if (Common) return true;
+				try { Common = new WindowsModernAPI; } catch (...) { return false; }
+				return true;
+			}
+			virtual ~WindowsModernAPI(void) override
+			{
+				ABI::Windows::Foundation::IAsyncAction * action;
+				if (controller->ShutdownQueueAsync(&action) == S_OK) {
+					action->GetResults();
+					action->Release();
+				}
+				controller->Release();
+				FreeLibrary(_lib_core_messaging);
+				FreeLibrary(_lib_com_base);
+			}
+		};
 		namespace COM
 		{
-			HSTRING EngineAllocateString(const widechar * string) { int length = StringLength(string) + 1; HSTRING result; if (WindowsCreateString(string, length, &result) != S_OK) return 0; return result; }
+			HSTRING EngineAllocateString(const widechar * string) { int length = StringLength(string) + 1; HSTRING result; if (WindowsModernAPI::Common->WindowsCreateString(string, length, &result) != S_OK) return 0; return result; }
 			class EnginePropertyValue : public ABI::Windows::Foundation::IPropertyValue
 			{
 				uint _ref_cnt;
@@ -201,7 +251,7 @@ namespace Engine
 				{
 					try {
 						UINT32 len;
-						auto pstr = WindowsGetStringRawBuffer(name, &len);
+						auto pstr = WindowsModernAPI::Common->WindowsGetStringRawBuffer(name, &len);
 						_name = string(pstr, len, SystemEncoding);
 						return S_OK;
 					} catch (...) { return E_OUTOFMEMORY; }
@@ -257,46 +307,6 @@ namespace Engine
 				void SetBorderMode(D2D1_BORDER_MODE value) { _border = value; }
 			};
 		}
-		class WindowsModernAPI : public Object
-		{
-			typedef HRESULT (WINAPI * func_CreateDispatcherQueueController) (DispatcherQueueOptions options, PDISPATCHERQUEUECONTROLLER * dispatcherQueueController);
-		private:
-			HMODULE _lib_core_messaging;
-			func_CreateDispatcherQueueController CreateDispatcherQueueController;
-			ABI::Windows::System::IDispatcherQueueController * controller;
-		private:
-			WindowsModernAPI(void) : controller(0)
-			{
-				_lib_core_messaging = LoadLibraryW(L"CoreMessaging.dll");
-				if (!_lib_core_messaging) throw Exception();
-				CreateDispatcherQueueController = reinterpret_cast<func_CreateDispatcherQueueController>(GetProcAddress(_lib_core_messaging, "CreateDispatcherQueueController"));
-				if (!CreateDispatcherQueueController) { FreeLibrary(_lib_core_messaging); throw Exception(); }
-				DispatcherQueueOptions options;
-				options.dwSize = sizeof(options);
-				options.threadType = DQTYPE_THREAD_CURRENT;
-				options.apartmentType = DQTAT_COM_ASTA;
-				if (CreateDispatcherQueueController(options, &controller) != S_OK) { FreeLibrary(_lib_core_messaging); throw Exception(); }
-			}
-		public:
-			static SafePointer<WindowsModernAPI> Common;
-		public:
-			static bool InitInstance(void) noexcept
-			{
-				if (Common) return true;
-				try { Common = new WindowsModernAPI; } catch (...) { return false; }
-				return true;
-			}
-			virtual ~WindowsModernAPI(void) override
-			{
-				ABI::Windows::Foundation::IAsyncAction * action;
-				if (controller->ShutdownQueueAsync(&action) == S_OK) {
-					action->GetResults();
-					action->Release();
-				}
-				controller->Release();
-				FreeLibrary(_lib_core_messaging);
-			}
-		};
 		class WindowLayers : public IWindowLayers
 		{
 			SafePointer<WindowsModernAPI> api;
