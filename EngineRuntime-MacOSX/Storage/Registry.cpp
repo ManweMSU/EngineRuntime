@@ -666,7 +666,7 @@ namespace Engine
 				if (storage) storage->Set(value, size);
 			}
 
-			static void ValidateMemoryRange(const uint8 * data, int size, int data_at, int of_length)
+			static void ValidateMemoryRange(int size, int data_at, int of_length)
 			{
 				if (data_at < 0 || data_at > size || size - data_at < of_length) throw InvalidFormatException();
 			}
@@ -694,30 +694,30 @@ namespace Engine
 				}
 				for (int i = 0; i < ValueCount; i++) {
 					int32 ValueOffset = *reinterpret_cast<const int32 *>(data + data_at + 8 + 8 * NodeCount + 4 * i);
-					ValidateMemoryRange(data, size, ValueOffset, 8);
+					ValidateMemoryRange(size, ValueOffset, 8);
 					int32 ValueNameOffset = *reinterpret_cast<const int32 *>(data + ValueOffset);
 					int32 ValueTypeCode = *reinterpret_cast<const int32 *>(data + ValueOffset + 4);
 					ValidateMemoryString(data, size, ValueNameOffset);
 					int index = CreateRawValue(string(data + ValueNameOffset, -1, Encoding::UTF16), static_cast<RegistryValueType>(ValueTypeCode));
 					auto & value = Values[index];
 					if (value.type == RegistryValueType::Integer || value.type == RegistryValueType::Float || value.type == RegistryValueType::Boolean || value.type == RegistryValueType::Color) {
-						ValidateMemoryRange(data, size, ValueOffset, 12);
+						ValidateMemoryRange(size, ValueOffset, 12);
 						int32 short_value = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						value.value_int32 = short_value;
 					} else if (value.type == RegistryValueType::LongInteger || value.type == RegistryValueType::Time || value.type == RegistryValueType::LongFloat) {
-						ValidateMemoryRange(data, size, ValueOffset, 16);
+						ValidateMemoryRange(size, ValueOffset, 16);
 						int64 long_value = *reinterpret_cast<const int64 *>(data + ValueOffset + 8);
 						value.value_int64 = long_value;
 					} else if (value.type == RegistryValueType::String) {
-						ValidateMemoryRange(data, size, ValueOffset, 12);
+						ValidateMemoryRange(size, ValueOffset, 12);
 						int32 offset = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						ValidateMemoryString(data, size, offset);
 						value.Set(string(data + offset, -1, Encoding::UTF16));
 					} else if (value.type == RegistryValueType::Binary) {
-						ValidateMemoryRange(data, size, ValueOffset, 16);
-						int32 size = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
+						ValidateMemoryRange(size, ValueOffset, 16);
+						int32 size_bin = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						int32 offset = *reinterpret_cast<const int32 *>(data + ValueOffset + 12);
-						ValidateMemoryRange(data, size, offset, size);
+						ValidateMemoryRange(size, offset, size_bin);
 						value.Set(data + offset, size);
 					} else value.type = RegistryValueType::Unknown;
 				}
