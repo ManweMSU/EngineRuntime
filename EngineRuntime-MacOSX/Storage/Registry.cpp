@@ -718,7 +718,7 @@ namespace Engine
 						int32 size_bin = *reinterpret_cast<const int32 *>(data + ValueOffset + 8);
 						int32 offset = *reinterpret_cast<const int32 *>(data + ValueOffset + 12);
 						ValidateMemoryRange(size, offset, size_bin);
-						value.Set(data + offset, size);
+						value.Set(data + offset, size_bin);
 					} else value.type = RegistryValueType::Unknown;
 				}
 			}
