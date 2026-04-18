@@ -1038,7 +1038,7 @@ namespace Engine
 				view->_is_arrow_hot = false;
 				view->reset_scroll_ranges();
 				if (view->_editor) view->ArrangeChildren();
-				View->Invalidate();
+				view->Invalidate();
 			}
 
 			void TreeView::generate_line_textures(void)
