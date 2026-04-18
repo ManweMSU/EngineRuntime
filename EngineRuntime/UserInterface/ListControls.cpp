@@ -469,16 +469,17 @@ namespace Engine
 				}
 				if (_editor) {
 					auto rect = _editor->GetRectangle();
+					auto spos = _scroll ? _scroll->Position : 0;
 					if (Tiled) {
 						int hpage = ControlBoundaries.Right - ControlBoundaries.Left - Border - Border - (_svisible ? ScrollSize : 0);
 						int epl = max(hpage / ElementHeight, 1);
 						int x = _current % epl, y = _current / epl;
-						auto item = Box(Border + x * ElementHeight, Border + y * ElementHeight - _scroll->Position,
-							Border + (x + 1) * ElementHeight, Border + (y + 1) * ElementHeight - _scroll->Position);
+						auto item = Box(Border + x * ElementHeight, Border + y * ElementHeight - spos,
+							Border + (x + 1) * ElementHeight, Border + (y + 1) * ElementHeight - spos);
 						_editor->SetPosition(Box(rect, item));
 					} else {
-						auto item = Box(Border, Border + ElementHeight * _current - _scroll->Position,
-							inner.Right - Border - (_svisible ? ScrollSize : 0), Border + ElementHeight * (_current + 1) - _scroll->Position);
+						auto item = Box(Border, Border + ElementHeight * _current - spos,
+							inner.Right - Border - (_svisible ? ScrollSize : 0), Border + ElementHeight * (_current + 1) - spos);
 						_editor->SetPosition(Box(rect, item));
 					}
 				}
@@ -1847,10 +1848,12 @@ namespace Engine
 					if (rect.IsValid()) _hscroll->SetPosition(Box(rect, inner));
 				}
 				if (_editor) {
-					auto item = Box(Border - _hscroll->Position + _columns[_editor_cell]._position_limit,
-						Border + HeaderHeight + ElementHeight * _current - _vscroll->Position,
-						Border - _hscroll->Position + _columns[_editor_cell]._position_limit + _columns[_editor_cell]._width,
-						Border + HeaderHeight + ElementHeight * (_current + 1) - _vscroll->Position);
+					auto svpos = _vscroll ? _vscroll->Position : 0;
+					auto shpos = _hscroll ? _hscroll->Position : 0;
+					auto item = Box(Border - shpos + _columns[_editor_cell]._position_limit,
+						Border + HeaderHeight + ElementHeight * _current - svpos,
+						Border - shpos + _columns[_editor_cell]._position_limit + _columns[_editor_cell]._width,
+						Border + HeaderHeight + ElementHeight * (_current + 1) - svpos);
 					_editor->SetPosition(Box(_editor->GetRectangle(), item));
 				}
 			}
