@@ -675,7 +675,7 @@ namespace Engine
 				if (data_at < 0 || data_at > size || size - data_at < 2) throw InvalidFormatException();
 				int pos = data_at;
 				while (size - pos >= 2 && *reinterpret_cast<const uint16 *>(data + pos)) pos += 2;
-				if (size - data_at < 2) throw InvalidFormatException();
+				if (size - pos < 2) throw InvalidFormatException();
 			}
 			void FillFromMemoryData(const uint8 * data, int size, int data_at)
 			{
