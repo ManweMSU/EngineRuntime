@@ -524,6 +524,7 @@ namespace Engine
 				_alpha_backbuffer = false;
 				_effect_flags = 0;
 				_parent = desc.ParentWindow ? static_cast<SystemWindow *>(desc.ParentWindow) : 0;
+				if ((desc.Flags & WindowFlagPopup) && _parent && [_parent->_window isSheet]) _parent = 0;
 				if (_parent) _parent->_children.Append(this);
 				try {
 					_delegate = [[ERTWindowDelegate alloc] init];

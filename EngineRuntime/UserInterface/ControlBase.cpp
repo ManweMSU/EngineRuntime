@@ -1449,6 +1449,7 @@ namespace Engine
 			auto c = control;
 			control->SubmitTask(CreateFunctionalTask([c]() {
 				auto system = c->GetControlSystem();
+				if (!system) return;
 				if (system->GetVirtualPopupStyles()) c->RemoveFromParent();
 				else c->GetWindow()->Destroy();
 			}));
